@@ -1,0 +1,17 @@
+.venv/
+__pycache__/
+*.pyc
+*.egg-info/
+build/
+dist/
+# point-cloud data — far too large for git (use scripts/make_sample.py for demos)
+*.ply
+*.las
+*.laz
+*.xyz
+sample_project/
+.pytest_cache/
+# project-mode outputs
+fixed/
+removed_points.xyz
+segfix_settings.json

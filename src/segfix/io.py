@@ -1,0 +1,421 @@
+"""Load and save segmented point clouds in PLY and LAS/LAZ.
+
+The instance label lives in a per-point field whose name varies between
+pipelines (``treeID``, ``PredInstance``, ``label`` ...), so we auto-detect it
+from a list of common candidates and remember which one we used in order to
+round-trip the file on save.
+"""
+
+from __future__ import annotations
+
+import os
+
+import numpy as np
+
+from .model import UNASSIGNED, PointCloud
+
+# PLY scalar type name -> numpy dtype string.
+PLY_TYPE_MAP = {
+    "char": "i1", "uchar": "u1", "short": "i2", "ushort": "u2",
+    "int": "i4", "uint": "u4", "float": "f4", "double": "f8",
+    "int8": "i1", "uint8": "u1", "int16": "i2", "uint16": "u2",
+    "int32": "i4", "uint32": "u4", "float32": "f4", "float64": "f8",
+}
+
+# Field names that commonly hold a per-point tree/instance ID, best first.
+LABEL_CANDIDATES = (
+    "treeID",
+    "tree_id",
+    "TreeID",
+    "PredInstance",
+    "instance",
+    "InstanceID",
+    "segment_id",
+    "label",
+    "scalar_treeID",
+    "scalar_label",
+    "ID",
+)
+
+
+def read_xyz(path: str) -> np.ndarray:
+    """Read just the ``(N, 3)`` float32 XYZ array from a PLY/LAS/LAZ file.
+
+    Lightweight helper for the project layer (bbox/position/neighbour work)
+    that does not need labels or attributes.
+    """
+    ext = os.path.splitext(path)[1].lower()
+    if ext in (".las", ".laz"):
+        import laspy
+
+        las = laspy.read(path)
+        return np.column_stack([las.x, las.y, las.z]).astype(np.float32)
+    if ext == ".ply":
+        from plyfile import PlyData
+
+        v = PlyData.read(path)["vertex"]
+        return np.column_stack([v["x"], v["y"], v["z"]]).astype(np.float32)
+    raise ValueError(f"Unsupported format: {ext}")
+
+
+def read_full(path: str):
+    """Read a PLY vertex element as a structured array (all properties).
+
+    Used when saving removed points, which must round-trip colour/normal/time
+    columns into ``removed_points.xyz``.  Returns ``None`` for non-PLY inputs.
+    """
+    ext = os.path.splitext(path)[1].lower()
+    if ext != ".ply":
+        return None
+    from plyfile import PlyData
+
+    return PlyData.read(path)["vertex"].data
+
+
+def _parse_ply_header(fh):
+    """Parse a binary/ascii PLY header from an open binary file handle.
+
+    Returns ``(fmt, vertex_props, vertex_count, data_offset)`` where
+    ``vertex_props`` is a list of ``(name, ply_type)`` and ``data_offset`` is
+    the byte offset where vertex data starts.  Handles the zero-padded vertex
+    counts that raycloudtools writes.
+    """
+    fmt = "ascii"
+    props: list[tuple[str, str]] = []
+    count = 0
+    current = None
+    while True:
+        line = fh.readline()
+        if not line:
+            break
+        text = line.decode("ascii", "replace").strip()
+        parts = text.split()
+        if not parts:
+            continue
+        if parts[0] == "format":
+            fmt = parts[1]
+        elif parts[0] == "element":
+            current = parts[1]
+            if current == "vertex":
+                count = int(parts[2])  # int() copes with leading zeros
+        elif parts[0] == "property" and current == "vertex":
+            # skip list properties (faces); vertices here are all scalars
+            if parts[1] != "list":
+                props.append((parts[2], parts[1]))
+        elif parts[0] == "end_header":
+            break
+    return fmt, props, count, fh.tell()
+
+
+def _is_rgb_segmented(props, label_field) -> bool:
+    """True when there is no label field but RGB colour is present."""
+    names = [p[0] for p in props]
+    if _pick_label_field(names, label_field) is not None:
+        return False
+    lowered = {n.lower() for n in names}
+    return {"red", "green", "blue"}.issubset(lowered)
+
+
+def load(path: str, label_field: str | None = None, max_points=None) -> PointCloud:
+    ext = os.path.splitext(path)[1].lower()
+    if ext in (".las", ".laz"):
+        return _load_las(path, label_field)
+    if ext == ".ply":
+        # Peek at the header: if the segmentation is encoded as RGB (no label
+        # field but colour present), take the fast RGB-segmented path.
+        with open(path, "rb") as fh:
+            fmt, props, _count, _off = _parse_ply_header(fh)
+        if "binary" in fmt and _is_rgb_segmented(props, label_field):
+            return load_rgb_segmented(path, max_points=max_points)
+        return _load_ply(path, label_field)
+    raise ValueError(f"Unsupported input format: {ext}")
+
+
+def load_rgb_segmented(path: str, max_points=None) -> PointCloud:
+    """Load a binary PLY whose tree segmentation is encoded as per-point RGB.
+
+    Each distinct colour becomes a tree label; pure black ``(0, 0, 0)`` is
+    treated as unsegmented.  Coordinates are read as float32; ``time``, the
+    normals and ``alpha`` are kept as attributes, and the per-label colours are
+    remembered so the file can be written back out (recoloured) on save.
+    """
+    with open(path, "rb") as fh:
+        fmt, props, count, offset = _parse_ply_header(fh)
+
+    byteorder = ">" if fmt == "binary_big_endian" else "<"
+    dtype = np.dtype([
+        (name, byteorder + PLY_TYPE_MAP.get(ptype.lower(), "f4"))
+        for name, ptype in props
+    ])
+    data = np.memmap(path, dtype=dtype, mode="r", offset=offset, shape=(count,))
+
+    if max_points is not None and count > max_points:
+        step = int(np.ceil(count / max_points))
+        data = data[::step]
+
+    names = {n.lower(): n for n in data.dtype.names}
+    coords = np.column_stack([
+        data[names["x"]], data[names["y"]], data[names["z"]]
+    ]).astype(np.float32)
+
+    r = data[names["red"]].astype(np.uint32)
+    g = data[names["green"]].astype(np.uint32)
+    b = data[names["blue"]].astype(np.uint32)
+    packed = (r << 16) | (g << 8) | b
+    uniq, inverse = np.unique(packed, return_inverse=True)
+
+    labels = (inverse + 1).astype(np.int32)
+    labels[packed == 0] = UNASSIGNED  # black = unsegmented
+    label_colors = {
+        int(k + 1): (int((u >> 16) & 255), int((u >> 8) & 255), int(u & 255))
+        for k, u in enumerate(uniq)
+        if u != 0
+    }
+
+    # Keep remaining columns so we can round-trip the raycloud format on save.
+    keep = {names.get(n) for n in ("x", "y", "z", "red", "green", "blue")}
+    attributes = {
+        name: np.ascontiguousarray(data[name])
+        for name in data.dtype.names
+        if name not in keep
+    }
+
+    return PointCloud(
+        coords=coords,
+        labels=labels,
+        attributes=attributes,
+        source_path=path,
+        label_field="treeID",
+        source_format="raycloud_rgb",
+        label_colors=label_colors,
+    )
+
+
+def save(cloud: PointCloud, path: str) -> None:
+    ext = os.path.splitext(path)[1].lower()
+    if ext in (".las", ".laz"):
+        _save_las(cloud, path)
+    elif ext == ".ply":
+        if cloud.source_format == "raycloud_rgb":
+            save_rgb_segmented(cloud, path)
+        else:
+            _save_ply(cloud, path)
+    else:
+        raise ValueError(f"Unsupported output format: {ext}")
+
+
+def color_for_label(label: int, label_colors=None) -> tuple[int, int, int]:
+    """RGB (0-255) for a tree label: its original colour, or a stable hash.
+
+    Labels carried over from the source keep their colour; labels created
+    during editing (splits, new trees) get a deterministic colour derived from
+    the id so they are distinct and reproducible.
+    """
+    from .model import NOISE, UNASSIGNED as _UN
+
+    if label in (_UN, NOISE):
+        return (0, 0, 0)
+    if label_colors and label in label_colors:
+        return tuple(label_colors[label])
+    h = (label * 0.61803398875) % 1.0
+    i = int(h * 6) % 6
+    f = h * 6 - int(h * 6)
+    v, p, q, t = 0.95, 0.33, 0.95 * (1 - f * 0.65), 0.95 * (1 - (1 - f) * 0.65)
+    rgb = [(v, t, p), (q, v, p), (p, v, t), (p, q, v), (t, p, v), (v, p, q)][i]
+    return tuple(int(round(c * 255)) for c in rgb)
+
+
+def save_rgb_segmented(cloud: PointCloud, path: str) -> None:
+    """Write a raycloud-style binary PLY, recolouring points by tree label.
+
+    Reconstructs the original column layout (double xyz, plus whatever
+    attributes were carried — ``time``, normals, ``alpha``) and writes each
+    point the colour of its current tree label, so a fixed segmentation is
+    saved in exactly the input format.
+    """
+    n = cloud.n_points
+    labels = cloud.labels
+
+    # Resolve a colour per point from the (possibly edited) labels.
+    colour = np.zeros((n, 3), dtype=np.uint8)
+    for label in np.unique(labels):
+        r, g, b = color_for_label(int(label), cloud.label_colors)
+        mask = labels == label
+        colour[mask] = (r, g, b)
+
+    # Column order matches raycloudtools: x y z time nx ny nz r g b alpha,
+    # but we only emit attributes actually present on the cloud.
+    fields = [("x", "<f8"), ("y", "<f8"), ("z", "<f8")]
+    extra_order = ["time", "nx", "ny", "nz"]
+    present_extra = [k for k in extra_order if k in cloud.attributes]
+    # any other carried attributes, appended after the known ones
+    present_extra += [
+        k for k in cloud.attributes if k not in present_extra
+    ]
+
+    columns = {
+        "x": cloud.coords[:, 0].astype("<f8"),
+        "y": cloud.coords[:, 1].astype("<f8"),
+        "z": cloud.coords[:, 2].astype("<f8"),
+    }
+    for k in present_extra:
+        arr = np.asarray(cloud.attributes[k])
+        fields.append((k, arr.dtype.newbyteorder("<").str))
+        columns[k] = arr
+    for c, name in zip("rgb", ("red", "green", "blue")):
+        fields.append((name, "u1"))
+        columns[name] = colour[:, "rgb".index(c)]
+    if "alpha" not in columns:
+        fields.append(("alpha", "u1"))
+        columns["alpha"] = np.full(n, 255, dtype=np.uint8)
+
+    struct = np.empty(n, dtype=np.dtype(fields))
+    for name, _ in fields:
+        struct[name] = columns[name]
+
+    ply_type = {
+        "f8": "double", "f4": "float", "u1": "uchar", "u4": "uint",
+        "i4": "int", "u2": "ushort", "i2": "short", "i1": "char",
+    }
+    header_lines = ["ply", "format binary_little_endian 1.0",
+                    "comment written by segfix", f"element vertex {n}"]
+    for name, dt in fields:
+        key = np.dtype(dt).str.lstrip("<>|")
+        header_lines.append(f"property {ply_type.get(key, 'float')} {name}")
+    header_lines.append("end_header\n")
+    header = ("\n".join(header_lines)).encode("ascii")
+
+    with open(path, "wb") as fh:
+        fh.write(header)
+        fh.write(struct.tobytes())
+
+
+def _pick_label_field(names, requested: str | None) -> str | None:
+    if requested is not None:
+        return requested if requested in names else None
+    lowered = {n.lower(): n for n in names}
+    for cand in LABEL_CANDIDATES:
+        if cand in names:
+            return cand
+        if cand.lower() in lowered:
+            return lowered[cand.lower()]
+    return None
+
+
+# -- LAS / LAZ -----------------------------------------------------------
+def _load_las(path: str, label_field: str | None) -> PointCloud:
+    import laspy
+
+    las = laspy.read(path)
+    coords = np.column_stack([las.x, las.y, las.z]).astype(np.float32)
+
+    dim_names = [d.name for d in las.point_format.dimensions]
+    field = _pick_label_field(dim_names, label_field)
+    if field is not None:
+        labels = np.asarray(las[field]).astype(np.int32)
+    else:
+        labels = np.zeros(len(coords), dtype=np.int32)
+        field = "treeID"
+
+    # Carry through other scalar dims (intensity etc.) for display/round-trip.
+    skip = {"X", "Y", "Z", "x", "y", "z", field}
+    attributes = {
+        name: np.asarray(las[name])
+        for name in dim_names
+        if name not in skip
+    }
+    return PointCloud(
+        coords=coords,
+        labels=labels,
+        attributes=attributes,
+        source_path=path,
+        label_field=field,
+        source_header=las.header,
+    )
+
+
+def _save_las(cloud: PointCloud, path: str) -> None:
+    import laspy
+
+    header = cloud.source_header
+    if header is None:
+        header = laspy.LasHeader(point_format=3, version="1.4")
+        # Auto-scale/offset so float coords survive the int storage.
+        mins = cloud.coords.min(axis=0)
+        header.offsets = mins
+        header.scales = np.array([0.001, 0.001, 0.001])
+    else:
+        header = laspy.LasHeader(
+            point_format=header.point_format, version=header.version
+        )
+        src = cloud.source_header
+        header.offsets = src.offsets
+        header.scales = src.scales
+
+    las = laspy.LasData(header)
+    las.x = cloud.coords[:, 0]
+    las.y = cloud.coords[:, 1]
+    las.z = cloud.coords[:, 2]
+
+    field = cloud.label_field
+    existing = {d.name for d in las.point_format.dimensions}
+    if field not in existing:
+        las.add_extra_dim(laspy.ExtraBytesParams(name=field, type=np.int32))
+    las[field] = cloud.labels
+
+    las.write(path)
+
+
+# -- PLY -----------------------------------------------------------------
+def _load_ply(path: str, label_field: str | None) -> PointCloud:
+    from plyfile import PlyData
+
+    ply = PlyData.read(path)
+    vertex = ply["vertex"]
+    coords = np.column_stack(
+        [vertex["x"], vertex["y"], vertex["z"]]
+    ).astype(np.float32)
+
+    prop_names = [p.name for p in vertex.properties]
+    field = _pick_label_field(prop_names, label_field)
+    if field is not None:
+        labels = np.asarray(vertex[field]).astype(np.int32)
+    else:
+        labels = np.zeros(len(coords), dtype=np.int32)
+        field = "treeID"
+
+    skip = {"x", "y", "z", field}
+    attributes = {
+        name: np.asarray(vertex[name]) for name in prop_names if name not in skip
+    }
+    return PointCloud(
+        coords=coords,
+        labels=labels,
+        attributes=attributes,
+        source_path=path,
+        label_field=field,
+    )
+
+
+def _save_ply(cloud: PointCloud, path: str) -> None:
+    from plyfile import PlyData, PlyElement
+
+    field = cloud.label_field
+    dtype = [("x", "f4"), ("y", "f4"), ("z", "f4"), (field, "i4")]
+    columns = [
+        cloud.coords[:, 0],
+        cloud.coords[:, 1],
+        cloud.coords[:, 2],
+        cloud.labels,
+    ]
+    for name, values in cloud.attributes.items():
+        values = np.asarray(values)
+        dtype.append((name, values.dtype.str))
+        columns.append(values)
+
+    vertex = np.empty(cloud.n_points, dtype=dtype)
+    for (name, _), col in zip(dtype, columns):
+        vertex[name] = col
+
+    el = PlyElement.describe(vertex, "vertex")
+    PlyData([el], text=False).write(path)
