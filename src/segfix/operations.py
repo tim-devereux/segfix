@@ -44,6 +44,20 @@ def unassign(cloud: PointCloud, indices) -> str:
     return f"Unassigned {n} points"
 
 
+def absorb_trees(cloud: PointCloud, tree_ids, target_id: int) -> str:
+    """Merge whole trees into an existing target tree.
+
+    The review-queue fix for over-segmentation: lasso a few points of each
+    fragment and every touched tree is folded into the current tree.
+    """
+    ids = sorted({int(t) for t in tree_ids} - {int(target_id)})
+    if not ids:
+        return "Selection touches no other tree to absorb"
+    indices = np.flatnonzero(np.isin(cloud.labels, ids))
+    n = cloud.set_labels(indices, int(target_id), f"absorb {ids} → {target_id}")
+    return f"Absorbed trees {ids} into {target_id} ({n:,} points)"
+
+
 def merge_ids(cloud: PointCloud, tree_ids) -> str:
     """Merge several whole trees into one (fixes over-segmentation).
 
@@ -82,8 +96,12 @@ def grow_from_seeds(
     k: int = 8,
     max_edge: float | None = None,
     claim_unassigned: bool = False,
-) -> str:
+) -> tuple[str, np.ndarray]:
     """Re-partition intermingled trees by growing outward from seed patches.
+
+    Unlike the other ops this returns ``(message, grown_indices)``: the
+    indices of every point that ended up assigned to one of the seeds, so
+    the UI can select the result for inspection.
 
     ``seed_groups`` is a list of point-index arrays, one patch per intended
     tree (typically a small lasso on each trunk).  Every point belonging to a
@@ -114,8 +132,9 @@ def grow_from_seeds(
 
     groups = [np.unique(np.asarray(g, dtype=np.int64)) for g in seed_groups]
     groups = [g for g in groups if g.size]
+    no_growth = np.empty(0, dtype=np.int64)
     if len(groups) < 2:
-        return "Grow needs at least two seed patches"
+        return "Grow needs at least two seed patches", no_growth
 
     all_seeds = np.concatenate(groups)
     touched = np.unique(cloud.labels[all_seeds])
@@ -129,7 +148,7 @@ def grow_from_seeds(
         work_mask |= in_box & (cloud.labels == UNASSIGNED)
     work = np.flatnonzero(work_mask)
     if work.size < 2:
-        return "Seeds touch no tree points to grow over"
+        return "Seeds touch no tree points to grow over", no_growth
 
     graph = kneighbors_graph(
         cloud.coords[work], min(k, work.size - 1), mode="distance"
@@ -182,7 +201,7 @@ def grow_from_seeds(
     stranded = int((assign < 0).sum())
     if stranded:
         msg += f" ({stranded:,} unreachable, unchanged)"
-    return msg
+    return msg, work[assign >= 0]
 
 
 def split_auto(cloud: PointCloud, tree_id: int, n_clusters: int = 2) -> str:

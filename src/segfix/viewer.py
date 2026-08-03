@@ -83,14 +83,23 @@ def colors_for_labels(labels: np.ndarray, label_colors=None) -> np.ndarray:
     return colors
 
 
-def visibility_mask(labels: np.ndarray, isolated=None, hide_unassigned=False):
-    """Per-point ``shown`` mask combining isolate mode and hide-unassigned."""
+def visibility_mask(labels: np.ndarray, isolated=None, hide_unassigned=False,
+                    hidden=None, focus=None):
+    """Per-point ``shown`` mask combining isolate mode, hide-unassigned,
+    manually hidden points (``hidden`` is a per-point boolean mask), and
+    focus mode (``focus`` tree IDs stay visible along with unassigned
+    points; other trees and noise are hidden)."""
     shown = np.ones(len(labels), dtype=bool)
     if isolated is not None:
         ids = np.fromiter(isolated, dtype=np.int64)
         shown &= np.isin(labels, ids)
+    if focus is not None:
+        ids = np.fromiter(focus, dtype=np.int64)
+        shown &= np.isin(labels, ids) | (labels == UNASSIGNED)
     if hide_unassigned:
         shown &= (labels != UNASSIGNED) & (labels != NOISE)
+    if hidden is not None and len(hidden) == len(labels):
+        shown &= ~hidden
     return shown
 
 

@@ -19,13 +19,16 @@ def test_grow_splits_fused_tree_by_connectivity():
         coords=np.vstack([a, b]).astype(np.float32),
         labels=np.full(120, 7, np.int32),
     )
-    msg = ops.grow_from_seeds(cloud, [np.arange(0, 5), np.arange(60, 65)])
+    msg, grown = ops.grow_from_seeds(
+        cloud, [np.arange(0, 5), np.arange(60, 65)]
+    )
 
     assert (cloud.labels[:60] == 7).all()  # first seed keeps the label
     new_id = cloud.labels[60]
     assert new_id != 7
     assert (cloud.labels[60:] == new_id).all()
     assert "2 seeds" in msg
+    assert grown.size == 120  # every point reached a seed
 
 
 def test_grow_follows_attachment_not_crown_distance():
@@ -117,6 +120,7 @@ def test_grow_needs_two_seeds():
         coords=np.random.rand(10, 3).astype(np.float32),
         labels=np.ones(10, np.int32),
     )
-    msg = ops.grow_from_seeds(cloud, [np.arange(3)])
+    msg, grown = ops.grow_from_seeds(cloud, [np.arange(3)])
     assert "two seed" in msg
+    assert grown.size == 0
     assert (cloud.labels == 1).all()

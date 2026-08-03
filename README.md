@@ -62,7 +62,7 @@ segfix WYTHAM_CHERLET_raycloud_segmented.ply --crop --output corrected.ply
 - The **tiles** dock (left) shows the cloud's XY extent. Set a grid (e.g. 4×4)
   and a **context margin** (surrounding points shown for reference but not
   saved), click *Make grid*, then double-click a tile to load it.
-- Fix it with the segfix panel (lasso + merge/split/reassign/delete), then
+- Fix it with the segfix panel (lasso + add/absorb/split/delete), then
   *Save Tile* (or `Ctrl+S`) to write just that tile's points back — or
   **Save & Next** to save and jump straight to the next unfinished tile.
   Saved tiles get a ✓; later tiles load with earlier edits already applied.
@@ -91,7 +91,7 @@ segfix --project sample_project
 - **Overlays**: unsegmented points (`*_non_seg.ply`, orange) and previously
   removed points (`removed_points.xyz`, magenta) are shown as dimmed context
   within a cylinder around the focus tree.
-- **Fix** the segmentation with the segfix panel (lasso + merge/split/reassign/
+- **Fix** the segmentation with the segfix panel (lasso + add/absorb/split/
   delete) — e.g. merge two over-segmented fragments, or lasso-split a fused
   pair into separate trees.
 - **Save Fixed** writes each resulting tree to `fixed/{tree_id}.ply` (indexed
@@ -114,41 +114,51 @@ stock chrome (menu bar, layer list/controls, console) hidden — everything
 you need is in the segfix panel, including a **Point size** spinner that
 applies across tile/tree loads.
 
-Everything is selection-first and driven by single keys, so the mouse stays on
-the canvas:
+The panel is a **review queue**: the Trees table lists every tree with a
+done checkbox, and progress is saved to a `<cloud>.segfix.json` sidecar so a
+half-finished plot resumes where you left off.
 
-1. The cloud opens in 3D, each tree a distinct colour. Grey = unassigned,
-   dark grey = noise. The mouse navigates by default; the panel shows a live
-   count of what's selected.
-2. **Select** points with the lasso: press **L**, drag a freehand loop
-   (Shift adds to the selection), press **L** again to go back to navigating.
-3. **Pick a target tree by eye** (for reassignment): select any point of the
-   destination tree and press **T** — it appears as a colour swatch in the
-   panel. No tree IDs to type, ever.
-4. **Fix** with one key:
+1. Press **Space** (or click a table row) to start reviewing. The camera
+   flies to the tree, a wireframe box marks it, and **focus mode** hides
+   everything except the tree, its neighbouring trees (those whose points
+   come within the *reach* distance) and the grey unassigned pool.
+2. Inspect it. If it's correct, press **Space** — the tree is marked done,
+   progress is saved, and the next unfinished tree loads. That's the loop.
+3. If it needs fixing, **select** points with the lasso: press **L**, drag a
+   freehand loop (Shift adds), **Esc** to go back to navigating. The tree
+   under review is always the implicit target — no tree IDs, no eyedropper:
 
    | Key | Operation |
    |-----|-----------|
-   | `R` | Reassign selection to the target tree |
-   | `N` | New tree from selection (split off) |
-   | `M` | Merge all trees the selection touches |
-   | `X` | Delete — mark selection as noise |
-   | `U` | Unassign selection |
-   | `K` | KMeans-split the tree under the selection into N parts |
-   | `I` | Isolate the selection's trees (press again to show all) |
-   | `H` | Hide/show unassigned + noise points |
+   | `Space` | Mark current tree done, jump to next unfinished |
+   | `←` / `→` | Previous / next tree (without marking done) |
+   | `A` | Add selection to the current tree (missing branches, unassigned canopy) |
+   | `Shift+A` | Absorb whole trees: every tree the selection touches merges into the current one (fix over-segmentation by lassoing a few points of each fragment) |
+   | `N` | Split selection off as a new tree (it joins the queue unreviewed) |
+   | `U` | Unassign selection — or the whole current tree if nothing is selected |
+   | `X` | Mark selection as noise — or the whole current tree if nothing is selected (dismiss a bush/wall in one key) |
+   | `F` | Find fragments: flag ⚑ floating/tiny trees touching a host tree |
+   | `Y` | Accept the current tree's ⚑ suggestion — absorb it into its host |
+   | `H` | Show/hide the unassigned + noise points |
    | `D` | Add the selection as a grow seed |
    | `G` | Grow from seeds |
    | `Delete` | Same as `X` (mark noise) |
    | `Ctrl+Z` / `Ctrl+Shift+Z` | Undo / Redo |
    | `Ctrl+S` | Save |
 
+   To move stray points *to a neighbour* instead, click the neighbour's row
+   (one click — it becomes current), lasso the strays, press `A`.
+4. After the last tree, any leftover unassigned points may hide missed
+   trees: with no tree selected everything is shown — lasso and press `N`
+   to create them (they join the queue).
+
 ### Untangling intermingled crowns
 
-For two (or more) trees whose branches interweave:
+For two (or more) trees whose branches interweave (the *Untangle* box,
+collapsed by default):
 
-1. Select a few points on each tree involved and press **I** — everything
-   else is hidden so stray lassos can't touch bystander trees.
+1. Review one of the trees involved — focus mode already hides bystander
+   trees so stray lassos can't touch them.
 2. Lasso a small patch on each trunk, pressing **D** after each — the seeds
    show as coloured markers, one colour per future tree.
 3. Press **G**. Every point of the trees the seeds touch is reassigned to the
@@ -156,7 +166,8 @@ For two (or more) trees whose branches interweave:
    k-nearest-neighbour graph), so branches follow their physical attachment
    instead of straight-line distance to a crown centre. This both splits a
    fused tree (one label, two seeds) and re-partitions a mislabelled tangle.
-4. Review, touch up borders with the lasso, press **I** to un-hide the rest.
+   The grown points stay selected for inspection; seeds are kept so you can
+   tweak *k* / *max link* and re-grow, then Clear.
 
 Growth parameters (in the Untangle box):
 

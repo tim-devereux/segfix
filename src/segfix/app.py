@@ -86,7 +86,8 @@ def main(argv=None) -> int:
 
     viewer.status = (
         f"Loaded {cloud.n_points:,} points · {len(cloud.tree_ids)} trees. "
-        "L = lasso, T = pick target tree, then R/N/M/X to fix."
+        "Space = review first tree, L = lasso, A/N/U/X to fix, "
+        "Space again when done."
     )
 
     napari.run()

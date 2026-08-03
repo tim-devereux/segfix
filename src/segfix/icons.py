@@ -167,6 +167,26 @@ def _folder(p: QPainter) -> None:
     p.drawPath(path)
 
 
+def _hide(p: QPainter) -> None:
+    """Crossed-out eye: hide points from view."""
+    p.drawEllipse(QRectF(5, 10, 22, 12))
+    p.setBrush(FG)
+    p.drawEllipse(QRectF(13, 13, 6, 6))
+    p.setBrush(Qt.NoBrush)
+    p.setPen(_pen(RED))
+    p.drawLine(QPointF(7, 27), QPointF(25, 5))
+
+
+def _move(p: QPainter) -> None:
+    """Four-way arrows: camera/movement mode."""
+    p.drawLine(QPointF(16, 9), QPointF(16, 23))
+    p.drawLine(QPointF(9, 16), QPointF(23, 16))
+    _arrowhead(p, (16, 3), (11, 9), (21, 9))
+    _arrowhead(p, (16, 29), (11, 23), (21, 23))
+    _arrowhead(p, (3, 16), (9, 11), (9, 21))
+    _arrowhead(p, (29, 16), (23, 11), (23, 21))
+
+
 def _next(p: QPainter) -> None:
     p.drawLine(QPointF(4, 16), QPointF(18, 16))
     _arrowhead(p, (23, 16), (16, 10), (16, 22))
@@ -174,6 +194,8 @@ def _next(p: QPainter) -> None:
 
 
 _DRAW = {
+    "hide": _hide,
+    "move": _move,
     "lasso": _lasso,
     "target": _target,
     "reassign": _reassign,
