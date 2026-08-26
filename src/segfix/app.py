@@ -1,17 +1,18 @@
 """Command-line entry point.
 
-Modes:
-- ``segfix`` (no path) — shows a startup dialog to pick a recent file/project
-  or import a new one. See :mod:`registry`/:mod:`startup_ui`.
-- ``segfix path/to/cloud.ply`` (binary PLY, the common case) — a tree table;
-  double-click a row to load that tree plus its spatial neighbours, instead
-  of loading the whole cloud at once. See :mod:`treecatalog`/:mod:`scene_ui`.
-- ``segfix path/to/cloud.las`` (or a non-binary/ASCII PLY) — load and edit
-  the whole cloud at once; memory-mapped partial loading isn't available for
-  these, so ``--max-points`` is the escape hatch for very large ones.
+``segfix`` always opens with a startup dialog to pick a recent project or
+import a new file — there's no way to pass a cloud path directly on the
+command line, so every session goes through the registry. See
+:mod:`registry`/:mod:`startup_ui`.
 
-Every path opened (whether given directly or picked from the startup dialog)
-is recorded in the registry, so it shows up next time.
+Once a path is chosen:
+- A binary PLY (RGB-segmented or label-field, the common case) gets a tree
+  table; double-click a row to load that tree plus its spatial neighbours,
+  instead of loading the whole cloud at once. See
+  :mod:`treecatalog`/:mod:`scene_ui`.
+- A non-binary/ASCII PLY or LAS/LAZ loads and edits the whole cloud at once;
+  memory-mapped partial loading isn't available for these, so
+  ``--max-points`` is the escape hatch for very large ones.
 """
 
 from __future__ import annotations
@@ -24,9 +25,6 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(
         prog="segfix",
         description="GUI tool to fix tree point-cloud instance segmentation.",
-    )
-    parser.add_argument(
-        "cloud", nargs="?", help="Input point cloud (.las/.laz/.ply)"
     )
     parser.add_argument(
         "--label-field",
@@ -57,18 +55,14 @@ def main(argv=None) -> int:
     import napari
 
     from . import registry
+    from .startup_ui import choose_project
 
-    if not args.cloud:
-        from .startup_ui import choose_project
-
-        choice = choose_project()
-        if choice is None:
-            return 0
-        open_path, registry_path, kind = choice
-        args.cloud = open_path
-        registry.add_entry(registry_path, kind=kind)
-    else:
-        registry.add_entry(args.cloud, kind="file")
+    choice = choose_project()
+    if choice is None:
+        return 0
+    open_path, registry_path, kind = choice
+    args.cloud = open_path
+    registry.add_entry(registry_path, kind=kind)
 
     if _is_binary_ply(args.cloud):
         return _run_scene(napari, args)

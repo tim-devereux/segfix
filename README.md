@@ -22,25 +22,23 @@ pip install -e .
 ## Run
 
 ```bash
-segfix path/to/cloud.las
-# or generate a practice cloud with built-in segmentation errors:
+segfix
+# or generate a practice cloud with built-in segmentation errors first:
 python scripts/make_sample.py sample.las
-segfix sample.las
 ```
+
+`segfix` always opens a startup dialog: double-click a recent project to
+reopen it, or click **New Project…** to import a point cloud file. Importing
+copies the file into a new project folder (created next to wherever you
+choose) and opens that copy — edits are always saved to the copy, never the
+original source file.
+
+Every project opened this way is recorded in `~/.config/segfix/registry.json`
+(a plain JSON file, not a database) so it shows up in the "Recent projects"
+list next time.
 
 The per-point tree ID field is auto-detected (`treeID`, `PredInstance`,
 `label`, …); override with `--label-field NAME` if needed.
-
-Running `segfix` with **no path** opens a startup dialog instead: double-click
-a recent project to reopen it, or click **New Project…** to import a point
-cloud file. Importing copies the file into a new project folder (created
-next to wherever you choose) and opens that copy — edits are always saved to
-the copy, never the original source file.
-
-Every project opened this way — or given directly on the command line, which
-skips the dialog entirely and edits the given file in place as before — is
-recorded in `~/.config/segfix/registry.json` (a plain JSON file, not a
-database) so it shows up in the "Recent projects" list next time.
 
 ## Editing workflow
 
