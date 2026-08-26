@@ -14,6 +14,8 @@ Built on [napari](https://napari.org) for fast 3D rendering and point selection.
 Requires Python 3.10–3.12 (napari/Qt do not yet ship wheels for 3.13+).
 
 ```bash
+git clone https://github.com/tim-devereux/segfix.git
+cd segfix
 conda create -n segfix python=3.11
 conda activate segfix
 pip install -e .
