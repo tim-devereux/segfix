@@ -180,7 +180,7 @@ class SegFixWidget(QWidget):
         self.lasso_btn.setCheckable(True)
         self.lasso_btn.toggled.connect(self.on_toggle_lasso)
         mode_row.addWidget(self.lasso_btn)
-        self.tree_lasso_btn = QPushButton("Lasso this tree (Shift+L)")
+        self.tree_lasso_btn = QPushButton("Lasso this tree (Ctrl+L)")
         self.tree_lasso_btn.setIcon(icon("lasso"))
         self.tree_lasso_btn.setIconSize(QSize(18, 18))
         self.tree_lasso_btn.setCheckable(True)
@@ -1023,7 +1023,7 @@ def bind_shortcuts(viewer, panel: SegFixWidget) -> None:
     """
     bindings = {
         "l": lambda v: panel.lasso_btn.toggle(),
-        "Shift-l": lambda v: panel.tree_lasso_btn.toggle(),
+        "Control-l": lambda v: panel.tree_lasso_btn.toggle(),
         "Escape": lambda v: panel.on_move_mode(),
         "Space": lambda v: panel.on_done_next(),
         "Left": lambda v: panel._step(-1),

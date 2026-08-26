@@ -16,7 +16,7 @@ import time
 from pathlib import Path
 
 MAX_ENTRIES = 20
-KINDS = ("file", "project", "workspace")
+KINDS = ("file", "workspace")
 
 
 def registry_path() -> Path:
@@ -51,8 +51,7 @@ def add_entry(path: str, kind: str, registry_file: Path | None = None) -> None:
     known. Trims to :data:`MAX_ENTRIES`, dropping the oldest first.
 
     ``kind`` is one of :data:`KINDS`: ``"file"`` (a bare point cloud opened
-    directly, no workspace), ``"project"`` (a ``--project DIR`` multi-file
-    directory), or ``"workspace"`` (a folder created by
+    directly, no workspace) or ``"workspace"`` (a folder created by
     :func:`segfix.workspace.create_workspace` — ``path`` is the *folder*,
     not the data file inside it).
     """

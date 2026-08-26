@@ -2,8 +2,8 @@
 
 Shown when segfix is launched with no path argument, so there's a way to
 pick what to open without needing to know the CLI flags up front. Providing
-a path on the command line (``segfix cloud.ply`` / ``--project DIR``) skips
-this entirely — it's purely a convenience for interactive launches.
+a path on the command line (``segfix cloud.ply``) skips this entirely —
+it's purely a convenience for interactive launches.
 """
 
 from __future__ import annotations
@@ -26,7 +26,7 @@ from qtpy.QtWidgets import (
 
 from . import registry, workspace
 
-_ICONS = {"workspace": "🗂", "project": "📁", "file": "📄"}
+_ICONS = {"workspace": "🗂", "file": "📄"}
 
 
 class StartupDialog(QDialog):
@@ -54,9 +54,7 @@ class StartupDialog(QDialog):
         hint = QLabel(
             "Double-click a recent project, or start a new one by importing "
             "a point cloud file — a private copy is made in a new project "
-            "folder, and edits are saved to that copy, never the original.\n"
-            "\"Open Project Folder…\" is for the separate forestry-QA "
-            "workflow: a directory of per-tree PLY files."
+            "folder, and edits are saved to that copy, never the original."
         )
         hint.setWordWrap(True)
         hint.setStyleSheet("color: gray;")
@@ -66,9 +64,6 @@ class StartupDialog(QDialog):
         new_btn = QPushButton("New Project…")
         new_btn.clicked.connect(self._new_project)
         row.addWidget(new_btn)
-        dir_btn = QPushButton("Open Project Folder…")
-        dir_btn.clicked.connect(self._browse_dir)
-        row.addWidget(dir_btn)
         row.addStretch()
         open_btn = QPushButton("Open")
         open_btn.clicked.connect(self._on_choose)
@@ -119,15 +114,6 @@ class StartupDialog(QDialog):
         self.registry_path = str(candidate)
         self.kind = "workspace"
         self.accept()
-
-    def _browse_dir(self) -> None:
-        path = QFileDialog.getExistingDirectory(
-            self, "Open project folder", str(Path.home()),
-        )
-        if path:
-            self.open_path = self.registry_path = path
-            self.kind = "project"
-            self.accept()
 
     def _on_choose(self, *_args) -> None:
         item = self.list.currentItem()

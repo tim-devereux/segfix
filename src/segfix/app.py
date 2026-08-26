@@ -9,8 +9,6 @@ Modes:
 - ``segfix path/to/cloud.las`` (or a non-binary/ASCII PLY) — load and edit
   the whole cloud at once; memory-mapped partial loading isn't available for
   these, so ``--max-points`` is the escape hatch for very large ones.
-- ``segfix --project DIR`` — open a directory of per-tree PLY files with a
-  tree table, neighbour loading, overlays and per-tree save.
 
 Every path opened (whether given directly or picked from the startup dialog)
 is recorded in the registry, so it shows up next time.
@@ -29,11 +27,6 @@ def main(argv=None) -> int:
     )
     parser.add_argument(
         "cloud", nargs="?", help="Input point cloud (.las/.laz/.ply)"
-    )
-    parser.add_argument(
-        "--project",
-        metavar="DIR",
-        help="Open a directory of per-tree PLY files in project mode",
     )
     parser.add_argument(
         "--label-field",
@@ -65,25 +58,18 @@ def main(argv=None) -> int:
 
     from . import registry
 
-    if not args.cloud and not args.project:
+    if not args.cloud:
         from .startup_ui import choose_project
 
         choice = choose_project()
         if choice is None:
             return 0
         open_path, registry_path, kind = choice
-        if kind == "project":
-            args.project = open_path
-        else:
-            args.cloud = open_path
+        args.cloud = open_path
         registry.add_entry(registry_path, kind=kind)
     else:
-        registry.add_entry(
-            args.project or args.cloud, kind="project" if args.project else "file"
-        )
+        registry.add_entry(args.cloud, kind="file")
 
-    if args.project:
-        return _run_project(napari, args)
     if _is_binary_ply(args.cloud):
         return _run_scene(napari, args)
 
@@ -139,9 +125,9 @@ def main(argv=None) -> int:
 def _combined_panel(*widgets):
     """Stack several dock-panel widgets into one scrollable widget.
 
-    Used so project/scene mode's own tree table sits above the shared segfix
-    editing panel in a single right-hand dock, instead of a separate left
-    dock — everything lives in one place.
+    Used so scene mode's own tree table sits above the shared segfix editing
+    panel in a single right-hand dock, instead of a separate left dock —
+    everything lives in one place.
     """
     from qtpy.QtWidgets import QScrollArea, QVBoxLayout, QWidget
 
@@ -256,58 +242,6 @@ def _run_scene(napari, args) -> int:
 
     viewer.status = (
         f"{len(catalog.records)} trees in {args.cloud}. "
-        "Double-click a tree to load it with neighbours."
-    )
-    napari.run()
-    return 0
-
-
-def _run_project(napari, args) -> int:
-    """Project mode: a directory of per-tree PLYs with a tree table."""
-    import numpy as np
-
-    from .model import PointCloud
-    from .project import Project
-    from .project_ui import ProjectController, ProjectWidget
-    from .viewer import add_cloud_layer, apply_cloudcompare_controls, busy, strip_ui
-    from .widgets import SegFixController, SegFixWidget, bind_shortcuts
-
-    viewer = napari.Viewer(title=f"segfix — {args.project}")
-    viewer.window._qt_window.showMaximized()
-    # Before any loading: strip_ui/apply_cloudcompare_controls only touch
-    # napari's own built-in chrome (menu bar, default docks, camera), not
-    # anything of ours, so they're safe this early — and doing them now
-    # means the "busy" status repaint below (and the directory scan) never
-    # flashes the default, unstripped napari GUI first.
-    apply_cloudcompare_controls(viewer)
-    strip_ui(viewer)
-    # An empty Points layer, added before any (potentially slow) loading:
-    # with zero layers, napari shows its own "drag a file here" welcome
-    # screen over the canvas — adding this one, even with no points yet,
-    # dismisses that so the busy status below isn't fighting it for
-    # attention.
-    empty = PointCloud(
-        coords=np.empty((0, 3), np.float32), labels=np.empty(0, np.int32)
-    )
-    layer = add_cloud_layer(viewer, empty, point_size=args.point_size)
-    busy(viewer, f"Scanning {args.project}…")
-
-    project = Project(args.project)
-
-    seg = SegFixController(viewer, empty, layer)
-    panel = SegFixWidget(seg)
-    project_ctrl = ProjectController(
-        viewer, project, seg, point_size=args.point_size
-    )
-    project_panel = ProjectWidget(project_ctrl)
-
-    _dock_top(viewer, panel)
-    _dock_right(viewer, _combined_panel(project_panel, panel))
-    panel.size_spin.setValue(args.point_size)
-    bind_shortcuts(viewer, panel)
-
-    viewer.status = (
-        f"{len(project.entries)} trees in {args.project}. "
         "Double-click a tree to load it with neighbours."
     )
     napari.run()

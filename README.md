@@ -12,8 +12,8 @@ Built on [napari](https://napari.org) for fast 3D rendering and point selection.
 Requires Python 3.10–3.12 (napari/Qt do not yet ship wheels for 3.13+).
 
 ```bash
-python3.11 -m venv .venv
-source .venv/bin/activate      # fish: source .venv/bin/activate.fish
+conda create -n segfix python=3.11
+conda activate segfix
 pip install -e .
 ```
 
@@ -33,9 +33,7 @@ Running `segfix` with **no path** opens a startup dialog instead: double-click
 a recent project to reopen it, or click **New Project…** to import a point
 cloud file. Importing copies the file into a new project folder (created
 next to wherever you choose) and opens that copy — edits are always saved to
-the copy, never the original source file. ("Open Project Folder…" is the
-separate `--project DIR` forestry-QA workflow below, a directory of per-tree
-PLY files rather than one imported cloud.)
+the copy, never the original source file.
 
 Every project opened this way — or given directly on the command line, which
 skips the dialog entirely and edits the given file in place as before — is
@@ -84,7 +82,7 @@ half-finished plot resumes where you left off.
    to create them (they join the queue).
 
 5. **Save** writes back preserving the original header (CRS, scale, offset)
-   and extra attributes; in project mode it saves per-tree files instead.
+   and extra attributes.
 
 ## Layout
 
@@ -96,16 +94,12 @@ half-finished plot resumes where you left off.
 | `lasso.py` | 3D screen-space lasso: camera projection + polygon test |
 | `viewer.py` | napari layer + label→colour mapping |
 | `widgets.py` | Qt dock panel wiring selection → operations |
-| `project.py` | project mode: PLY discovery, neighbour finding, settings |
-| `trees.py` | load many per-tree PLYs into one cloud; save + removed tracking |
-| `overlays.py` | non-seg / removed-point cylinder overlays |
-| `project_ui.py` | tree table + project controller |
 | `treecatalog.py` | default mode: memory-mapped tree-label grouping, neighbour load + write-back |
 | `scene_ui.py` | tree table + scene controller for the default mode |
 | `registry.py` | on-disk list of recently opened files/projects |
 | `workspace.py` | project folders: copy an imported file, never touch the source |
-| `startup_ui.py` | startup dialog: pick a recent entry, new project, or `--project` folder |
-| `app.py` | `segfix` CLI entry point (default table mode / `--project`) |
+| `startup_ui.py` | startup dialog: pick a recent entry or start a new project |
+| `app.py` | `segfix` CLI entry point |
 
 ## Tests
 
