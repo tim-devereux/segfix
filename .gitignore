@@ -10,6 +10,7 @@ dist/
 *.laz
 *.xyz
 sample_project/
+test_project/
 .pytest_cache/
 # project-mode outputs
 fixed/
@@ -17,3 +18,5 @@ removed_points.xyz
 segfix_settings.json
 # per-cloud review-progress sidecars
 *.segfix.json
+# workspace manifests (scene-mode "New Project" folders)
+segfix_project.json

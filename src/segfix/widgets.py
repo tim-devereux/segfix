@@ -4,8 +4,7 @@ The workflow is a review queue.  The table lists every tree; Space marks the
 current tree done and jumps to the next unfinished one, flying the camera to
 it and focusing the view on the tree, its neighbours and the unassigned pool.
 The current tree is always the implicit target: lasso points (L) and press A
-to add them to it, Shift+A to absorb whole fragments, N to split a new tree
-off, U/X to unassign or trash.  Seeds+grow remains for intermingled crowns.
+to add them to it, N to split a new tree off, U/X to unassign or trash.
 """
 
 from __future__ import annotations
@@ -19,15 +18,15 @@ from qtpy.QtGui import QBrush, QColor, QPixmap
 from qtpy.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
+    QComboBox,
     QDoubleSpinBox,
-    QFileDialog,
     QGroupBox,
     QHBoxLayout,
     QHeaderView,
     QLabel,
     QMessageBox,
     QPushButton,
-    QSpinBox,
+    QSlider,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -38,7 +37,13 @@ from . import operations as ops
 from .icons import icon
 from .lasso import LassoTool
 from .model import NOISE, UNASSIGNED, PointCloud
-from .viewer import colors_for_labels, refresh_layer, visibility_mask
+from .viewer import (
+    add_gpu_status_widget,
+    busy,
+    colors_for_labels,
+    refresh_layer,
+    visibility_mask,
+)
 
 
 class SegFixController:
@@ -49,11 +54,16 @@ class SegFixController:
         self.cloud = cloud
         self.layer = layer
         self.save_path = cloud.source_path
-        # Optional override: when set (project/crop mode), Save delegates here
-        # instead of writing a single file. Signature: () -> str.
+        # Optional override: when set (project/scene mode), Save delegates
+        # here instead of writing a single file. Signature: () -> str.
         self.on_save_override = None
         # Set by the panel so it can re-hook layer events after a reload.
         self.on_cloud_changed = None
+        # Optional fn(indices)->indices narrowing a lasso's result before it
+        # becomes the selection — set by the panel for the "current tree
+        # only" lasso mode; persists across set_cloud (it's a mode choice,
+        # not per-cloud state).
+        self.lasso_filter = None
         self.lasso = LassoTool(viewer, layer, self._on_lasso)
 
     def set_cloud(self, cloud: PointCloud, layer) -> None:
@@ -70,6 +80,8 @@ class SegFixController:
             self.on_cloud_changed()
 
     def _on_lasso(self, indices: np.ndarray, additive: bool) -> None:
+        if self.lasso_filter is not None:
+            indices = self.lasso_filter(indices)
         current = set(self.layer.selected_data) if additive else set()
         current.update(int(i) for i in indices)
         self.layer.selected_data = current
@@ -87,19 +99,16 @@ class SegFixController:
 class SegFixWidget(QWidget):
     """The dock panel: the tree queue plus the few ops the loop needs."""
 
-    SEED_COLORS = ["red", "cyan", "yellow", "magenta", "lime", "orange"]
     DONE_BG = QColor(35, 62, 42)  # green tint marking finished rows
     BBOX_LAYER = "tree bbox"
+    HIDE_COL = 3
 
     def __init__(self, controller: SegFixController):
         super().__init__()
         self.c = controller
         self.current: int | None = None  # the tree under review
-        self.focused: set[int] | None = None  # focus mode: visible tree IDs
         self.done_ids: set[int] = set()  # trees marked done in the table
-        # Fragment-merge suggestions from the scan: {fragment: (host, gap)}.
-        self.suggestions: dict[int, tuple[int, float]] = {}
-        self.seeds: list[np.ndarray] = []
+        self.hidden_ids: set[int] = set()  # trees manually hidden via 👁
         self._table_updating = False
         self._bbox_ids: set[int] = set()
         self._bbox_busy = False
@@ -109,11 +118,15 @@ class SegFixWidget(QWidget):
         self.info = QLabel()
         layout.addWidget(self.info)
 
+        add_gpu_status_widget(controller.viewer)
+
         # -- the queue: one row per tree, click = review that tree ------
-        self.trees_box = QGroupBox("Trees")
+        self.trees_box = QGroupBox("Review queue")
         tlay = QVBoxLayout(self.trees_box)
-        self.tree_table = QTableWidget(0, 3)
-        self.tree_table.setHorizontalHeaderLabels(["✓", "Tree", "Points"])
+        self.tree_table = QTableWidget(0, 4)
+        self.tree_table.setHorizontalHeaderLabels(["✓", "Tree", "Points", ""])
+        self.tree_table.horizontalHeaderItem(self.HIDE_COL).setIcon(icon("hide"))
+        self.tree_table.horizontalHeaderItem(self.HIDE_COL).setToolTip("Hide")
         self.tree_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.tree_table.setSelectionMode(QAbstractItemView.SingleSelection)
         self.tree_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
@@ -123,6 +136,7 @@ class SegFixWidget(QWidget):
         header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
         header.setSectionResizeMode(1, QHeaderView.Stretch)
         header.setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(self.HIDE_COL, QHeaderView.ResizeToContents)
         self.tree_table.setMaximumHeight(200)
         self.tree_table.itemSelectionChanged.connect(self._on_table_selection)
         self.tree_table.itemChanged.connect(self._on_tree_item_changed)
@@ -139,40 +153,19 @@ class SegFixWidget(QWidget):
         nav_row.addWidget(self.done_btn, stretch=1)
         tlay.addLayout(nav_row)
 
-        # Focus mode: only the current tree, its neighbours and unassigned
-        # points stay visible, so one tree is fixed without clutter.
-        focus_row = QHBoxLayout()
-        self.focus_check = QCheckBox("Focus current + neighbours")
-        self.focus_check.setChecked(True)
-        self.focus_check.setToolTip(
-            "Show only the tree under review, its neighbouring trees, and "
-            "unassigned points."
-        )
-        self.focus_check.toggled.connect(self._on_focus_changed)
-        focus_row.addWidget(self.focus_check, stretch=1)
-        focus_row.addWidget(QLabel("reach"))
-        self.focus_margin = QDoubleSpinBox()
-        self.focus_margin.setRange(0.1, 50.0)
-        self.focus_margin.setDecimals(1)
-        self.focus_margin.setSingleStep(0.5)
-        self.focus_margin.setValue(1.0)
-        self.focus_margin.setSuffix(" m")
-        self.focus_margin.setToolTip(
-            "Neighbour reach: trees whose points come within this distance "
-            "of the current tree's points count as neighbours."
-        )
-        self.focus_margin.valueChanged.connect(self._on_focus_changed)
-        focus_row.addWidget(self.focus_margin)
-        tlay.addLayout(focus_row)
-        self._button(
-            tlay, "Find fragments (F)", self.on_scan_fragments, "merge"
-        )
         layout.addWidget(self.trees_box)
 
+        # Interaction / View / Cross section live in a separate horizontal
+        # bar (docked at the top of the window by app.py, not stacked in
+        # this side panel) — they're about the canvas/viewport, not the
+        # tree-review workflow the rest of this panel is organised around.
+        self.top_bar = QWidget()
+        top_bar_row = QHBoxLayout(self.top_bar)
+        top_bar_row.setContentsMargins(0, 0, 0, 0)
+
         # -- interaction mode: move (camera) vs lasso -----------------
-        self.mode_label = QLabel()
-        self.mode_label.setAlignment(Qt.AlignCenter)
-        layout.addWidget(self.mode_label)
+        interaction_box = QGroupBox("Interaction")
+        interaction = QVBoxLayout(interaction_box)
         mode_row = QHBoxLayout()
         self.move_btn = QPushButton("Move (Esc)")
         self.move_btn.setIcon(icon("move"))
@@ -187,9 +180,27 @@ class SegFixWidget(QWidget):
         self.lasso_btn.setCheckable(True)
         self.lasso_btn.toggled.connect(self.on_toggle_lasso)
         mode_row.addWidget(self.lasso_btn)
-        layout.addLayout(mode_row)
+        self.tree_lasso_btn = QPushButton("Lasso this tree (Shift+L)")
+        self.tree_lasso_btn.setIcon(icon("lasso"))
+        self.tree_lasso_btn.setIconSize(QSize(18, 18))
+        self.tree_lasso_btn.setCheckable(True)
+        self.tree_lasso_btn.setToolTip(
+            "Freehand-select, but only points already belonging to the tree "
+            "under review — grabs a clean patch out of a crowded/overlapping "
+            "area without also picking up neighbouring trees."
+        )
+        self.tree_lasso_btn.toggled.connect(self.on_toggle_tree_lasso)
+        mode_row.addWidget(self.tree_lasso_btn)
+        interaction.addLayout(mode_row)
+        self.mode_label = QLabel()
+        self.mode_label.setAlignment(Qt.AlignCenter)
+        interaction.addWidget(self.mode_label)
+        top_bar_row.addWidget(interaction_box)
         self._update_mode_indicator()
 
+        # -- view: what's visible/selectable, and how big it renders ---
+        view_box = QGroupBox("View")
+        view = QVBoxLayout(view_box)
         view_row = QHBoxLayout()
         self.show_unassigned = QCheckBox("Show unassigned (H)")
         self.show_unassigned.setChecked(True)
@@ -204,7 +215,49 @@ class SegFixWidget(QWidget):
         self.size_spin.setValue(0.01)
         self.size_spin.valueChanged.connect(self._on_point_size)
         view_row.addWidget(self.size_spin)
-        layout.addLayout(view_row)
+        view.addLayout(view_row)
+        top_bar_row.addWidget(view_box)
+
+        # -- cross section: an interactive slab along one axis; while on,
+        # only points inside it are shown and selectable (folded into the
+        # same layer.shown mechanism as focus mode / hidden trees) --------
+        self.cross_box = QGroupBox("Cross section (C)")
+        self.cross_box.setCheckable(True)
+        self.cross_box.setChecked(False)
+        self.cross_box.setToolTip(
+            "Slice the cloud to a slab along one axis. While enabled, only "
+            "points inside the slab are shown or selectable."
+        )
+        self.cross_box.toggled.connect(self._on_cross_section_toggled)
+        cross = QVBoxLayout(self.cross_box)
+        cross_top = QHBoxLayout()
+        cross_top.addWidget(QLabel("Axis"))
+        self.cross_axis_combo = QComboBox()
+        self.cross_axis_combo.addItems(["X", "Y", "Z"])
+        self.cross_axis_combo.setCurrentIndex(2)  # Z: height, usually most useful
+        self.cross_axis_combo.currentIndexChanged.connect(self._on_cross_axis_changed)
+        cross_top.addWidget(self.cross_axis_combo)
+        reset_btn = QPushButton("Reset")
+        reset_btn.setToolTip("Widen the slab back out to the full extent")
+        reset_btn.clicked.connect(self._on_cross_reset)
+        cross_top.addWidget(reset_btn)
+        self.cross_range_label = QLabel()
+        cross_top.addWidget(self.cross_range_label, stretch=1)
+        cross.addLayout(cross_top)
+        slab_row = QHBoxLayout()
+        slab_row.addWidget(QLabel("Min"))
+        self.cross_min_slider = QSlider(Qt.Horizontal)
+        self.cross_min_slider.valueChanged.connect(self._on_cross_range_changed)
+        slab_row.addWidget(self.cross_min_slider)
+        slab_row.addWidget(QLabel("Max"))
+        self.cross_max_slider = QSlider(Qt.Horizontal)
+        self.cross_max_slider.valueChanged.connect(self._on_cross_range_changed)
+        slab_row.addWidget(self.cross_max_slider)
+        cross.addLayout(slab_row)
+        top_bar_row.addWidget(self.cross_box)
+        self._cross_lo, self._cross_hi = 0.0, 1.0
+        self._reset_cross_section_range()
+        top_bar_row.addStretch()
 
         # -- fixing the current tree ----------------------------------
         sel_box = QGroupBox("Current tree")
@@ -216,102 +269,58 @@ class SegFixWidget(QWidget):
         self.current_label = QLabel()
         crow.addWidget(self.current_label, stretch=1)
         sel.addLayout(crow)
-        self.suggest_label = QLabel()
-        self.suggest_label.setStyleSheet("color: #e0c060; font-weight: bold;")
-        self.suggest_label.setVisible(False)
-        sel.addWidget(self.suggest_label)
-        self.accept_btn = QPushButton()
-        self.accept_btn.setIcon(icon("merge"))
-        self.accept_btn.setIconSize(QSize(18, 18))
-        self.accept_btn.clicked.connect(self.on_accept_suggestion)
-        self.accept_btn.setVisible(False)
-        sel.addWidget(self.accept_btn)
         self.sel_info = QLabel()
         sel.addWidget(self.sel_info)
+
+        sel.addWidget(self._subheading("Move selection into a tree"))
         self.add_btn = QPushButton()
         self.add_btn.setIcon(icon("reassign"))
         self.add_btn.setIconSize(QSize(18, 18))
         self.add_btn.clicked.connect(self.on_add)
         sel.addWidget(self.add_btn)
-        absorb_btn = QPushButton("Absorb touched trees (Shift+A)")
-        absorb_btn.setIcon(icon("merge"))
-        absorb_btn.setIconSize(QSize(18, 18))
-        absorb_btn.setToolTip(
-            "Every tree the selection touches is merged whole into the "
-            "current tree — lasso a few points of each fragment."
+        neighbour_header = QHBoxLayout()
+        self.neighbour_label = QLabel("Send selection to neighbour:")
+        self.neighbour_label.setVisible(False)
+        neighbour_header.addWidget(self.neighbour_label, stretch=1)
+        neighbour_header.addWidget(QLabel("reach"))
+        self.focus_margin = QDoubleSpinBox()
+        self.focus_margin.setRange(0.1, 50.0)
+        self.focus_margin.setDecimals(1)
+        self.focus_margin.setSingleStep(0.5)
+        self.focus_margin.setValue(1.0)
+        self.focus_margin.setSuffix(" m")
+        self.focus_margin.setToolTip(
+            "Neighbour reach: trees whose points come within this distance "
+            "of the current tree's points count as neighbours."
         )
-        absorb_btn.clicked.connect(self.on_absorb)
-        sel.addWidget(absorb_btn)
+        self.focus_margin.valueChanged.connect(self._update_neighbour_picker)
+        neighbour_header.addWidget(self.focus_margin)
+        sel.addLayout(neighbour_header)
+        self.neighbour_row = QHBoxLayout()
+        self.neighbour_row.setContentsMargins(0, 0, 0, 0)
+        sel.addLayout(self.neighbour_row)
+        self._button(
+            sel, "Hide all neighbours", self.on_hide_neighbours, "hide"
+        )
+
+        sel.addWidget(self._subheading("Remove selection from its tree"))
         self._button(sel, "Split off as new tree (N)", self.on_create_new, "new")
         self._button(sel, "Unassign (U)", self.on_unassign, "unassign")
         self._button(sel, "Noise (X)", self.on_noise, "noise")
         layout.addWidget(sel_box)
 
-        # -- seeds + grow for intermingled crowns (collapsed) ----------
-        self.grow_box = QGroupBox("Untangle intermingled trees")
-        self.grow_box.setCheckable(True)
-        self.grow_box.setChecked(False)
-        box_lay = QVBoxLayout(self.grow_box)
-        grow_inner = QWidget()
-        grow = QVBoxLayout(grow_inner)
-        grow.setContentsMargins(0, 0, 0, 0)
-        seed_row = QHBoxLayout()
-        self.seed_info = QLabel("no seeds")
-        seed_row.addWidget(self.seed_info, stretch=1)
-        self._button(seed_row, "Add seed (D)", self.on_add_seed, "seed")
-        self._button(seed_row, "Clear", self.on_clear_seeds, "clear")
-        grow.addLayout(seed_row)
-
-        params = QHBoxLayout()
-        params.addWidget(QLabel("k"))
-        self.grow_k = QSpinBox()
-        self.grow_k.setRange(2, 32)
-        self.grow_k.setValue(8)
-        self.grow_k.setToolTip(
-            "Neighbours per point in the growth graph. Lower follows thin "
-            "strands more strictly; higher tolerates gappy scans."
-        )
-        params.addWidget(self.grow_k)
-        params.addWidget(QLabel("max link"))
-        self.grow_link = QDoubleSpinBox()
-        self.grow_link.setRange(0.0, 10.0)
-        self.grow_link.setDecimals(2)
-        self.grow_link.setSingleStep(0.05)
-        self.grow_link.setValue(0.0)
-        self.grow_link.setSuffix(" m")
-        self.grow_link.setSpecialValueText("off")
-        self.grow_link.setToolTip(
-            "Sever graph links longer than this, so growth can't leak across "
-            "branches that merely touch. Cut-off points keep their label. "
-            "Try 0.2–0.5 m for tangled crowns; 'off' = unlimited."
-        )
-        params.addWidget(self.grow_link)
-        params.addStretch()
-        grow.addLayout(params)
-
-        self.grow_claim = QCheckBox("Claim unassigned points near the trees")
-        self.grow_claim.setToolTip(
-            "Also assign unassigned points around the involved trees (their "
-            "bounding box + 2 m) to the nearest seed — pulls unsegmented "
-            "canopy into the right tree."
-        )
-        grow.addWidget(self.grow_claim)
-        self._button(grow, "Grow from seeds (G)", self.on_grow, "grow")
-        box_lay.addWidget(grow_inner)
-        grow_inner.setVisible(False)
-        self.grow_box.toggled.connect(grow_inner.setVisible)
-        layout.addWidget(self.grow_box)
-
-        # -- history + save ------------------------------------------
+        # -- session: history + save -----------------------------------
+        session_box = QGroupBox("Session")
+        session = QVBoxLayout(session_box)
         hist = QHBoxLayout()
         self._button(hist, "Undo (Ctrl+Z)", self.on_undo, "undo")
         self._button(hist, "Redo", self.on_redo, "redo")
-        layout.addLayout(hist)
+        session.addLayout(hist)
 
         save = QHBoxLayout()
-        self._button(save, "Save (Ctrl+S)", self.on_save, "save")
-        self._button(save, "Save As…", self.on_save_as, "save")
-        layout.addLayout(save)
+        self._button(save, "Save Project (Ctrl+S)", self.on_save, "save")
+        session.addLayout(save)
+        layout.addWidget(session_box)
 
         layout.addStretch()
         self._on_cloud_changed()
@@ -325,24 +334,68 @@ class SegFixWidget(QWidget):
         btn.clicked.connect(slot)
         parent_layout.addWidget(btn)
 
+    def _subheading(self, text: str) -> QLabel:
+        """A small bold label dividing a group box into sub-sections,
+        lighter-weight than nesting another QGroupBox."""
+        label = QLabel(text)
+        label.setStyleSheet(
+            "font-weight: bold; color: gray; margin-top: 4px;"
+        )
+        return label
+
     def _on_point_size(self, value: float) -> None:
         if self.c.layer is not None and len(self.c.layer.data):
             self.c.layer.size = value
 
     def on_toggle_lasso(self, checked: bool) -> None:
         self.c.lasso.set_armed(checked)
-        self.move_btn.blockSignals(True)
-        self.move_btn.setChecked(not checked)
-        self.move_btn.blockSignals(False)
+        self.c.lasso_filter = None
+        if checked:
+            self._uncheck_other_modes(self.lasso_btn)
+        else:
+            self.move_btn.setChecked(True)
         self._update_mode_indicator()
+
+    def on_toggle_tree_lasso(self, checked: bool) -> None:
+        self.c.lasso.set_armed(checked)
+        self.c.lasso_filter = self._filter_to_current_tree if checked else None
+        if checked:
+            self._uncheck_other_modes(self.tree_lasso_btn)
+        else:
+            self.move_btn.setChecked(True)
+        self._update_mode_indicator()
+
+    def _filter_to_current_tree(self, indices: np.ndarray) -> np.ndarray:
+        """Keep only the points among ``indices`` already in the current
+        tree — no restriction if nothing's under review yet."""
+        if self.current is None:
+            return indices
+        return indices[self.c.cloud.labels[indices] == self.current]
+
+    def _uncheck_other_modes(self, active_btn) -> None:
+        for btn in (self.move_btn, self.lasso_btn, self.tree_lasso_btn):
+            if btn is active_btn:
+                continue
+            btn.blockSignals(True)
+            btn.setChecked(False)
+            btn.blockSignals(False)
 
     def on_move_mode(self) -> None:
         """Revert to camera/movement controls (Escape)."""
         self.lasso_btn.setChecked(False)  # disarms lasso via on_toggle_lasso
+        self.tree_lasso_btn.setChecked(False)  # ditto, tree-only lasso
         self.move_btn.setChecked(True)  # stay checked even if already in move
 
     def _update_mode_indicator(self) -> None:
-        if self.c.lasso.armed:
+        if self.tree_lasso_btn.isChecked():
+            self.mode_label.setText(
+                "LASSO (THIS TREE) — drag selects only the current tree's points"
+            )
+            self.mode_label.setStyleSheet(
+                "background: #6a3a7a; color: #e0b3ff;"
+                "border-radius: 3px; padding: 3px; font-weight: bold;"
+            )
+        elif self.c.lasso.armed:
             self.mode_label.setText("LASSO — drag selects points")
             self.mode_label.setStyleSheet(
                 "background: #7a6a20; color: #ffe066;"
@@ -358,13 +411,12 @@ class SegFixWidget(QWidget):
     def _on_cloud_changed(self) -> None:
         """A new cloud/layer was loaded: reset per-cloud state, re-hook."""
         self.current = None
-        self.focused = None
-        self.suggestions = {}
+        self.hidden_ids = set()
+        # A slab computed for the previous cloud's coordinate space doesn't
+        # carry over; turn the tool off and recompute its range for this one.
+        self.cross_box.setChecked(False)
+        self._reset_cross_section_range()
         self._load_progress()  # done-tree set lives beside the source file
-        self.seeds = []
-        self.seed_info.setText("no seeds")
-        if "seeds" in self.c.viewer.layers:
-            self.c.viewer.layers.remove("seeds")
         self._on_point_size(self.size_spin.value())  # size persists across loads
         self._update_info()
         self._update_selection()
@@ -380,7 +432,6 @@ class SegFixWidget(QWidget):
             "Delete": self.on_noise,
             "Backspace": self.on_noise,
             "a": self.on_add,
-            "Shift-a": self.on_absorb,
             "Space": self.on_done_next,
         }
         for key, fn in layer_keys.items():
@@ -401,6 +452,7 @@ class SegFixWidget(QWidget):
         rgba = colors_for_labels(vals, cloud.label_colors)
 
         id_set = {int(t) for t in vals}
+        self.hidden_ids &= id_set  # drop ids for trees that no longer exist
         self._table_updating = True
         self.tree_table.blockSignals(True)
         self.tree_table.setSortingEnabled(False)
@@ -421,17 +473,18 @@ class SegFixWidget(QWidget):
             swatch = QPixmap(12, 12)
             swatch.fill(QColor(r, g, b))
             id_item.setData(Qt.DecorationRole, swatch)
-            sug = self.suggestions.get(int(tid))
-            if sug is not None and sug[0] in id_set:
-                id_item.setForeground(QBrush(QColor("#e0c060")))
-                id_item.setToolTip(
-                    f"fragment? → tree {sug[0]} ({sug[1] * 100:.0f} cm gap) "
-                    "— Y to absorb"
-                )
             self.tree_table.setItem(row, 1, id_item)
             count_item = QTableWidgetItem()
             count_item.setData(Qt.DisplayRole, int(count))
             self.tree_table.setItem(row, 2, count_item)
+            hidden = int(tid) in self.hidden_ids
+            hide_item = QTableWidgetItem()
+            hide_item.setFlags(
+                Qt.ItemIsEnabled | Qt.ItemIsSelectable | Qt.ItemIsUserCheckable
+            )
+            hide_item.setCheckState(Qt.Checked if hidden else Qt.Unchecked)
+            hide_item.setToolTip("Hide this tree's points in the 3D view")
+            self.tree_table.setItem(row, self.HIDE_COL, hide_item)
             self._style_done_row(row, done)
         self.tree_table.setSortingEnabled(True)
         self.tree_table.blockSignals(False)
@@ -477,7 +530,6 @@ class SegFixWidget(QWidget):
         self._table_updating = False
         if changed:
             self.c.layer.selected_data = set()
-        self._refresh_focus()
         self._update_tree_bbox([] if tid is None else [tid])
         self._update_current_info()
         if changed and fly and tid is not None:
@@ -534,35 +586,41 @@ class SegFixWidget(QWidget):
         canvas = getattr(self.c.viewer, "_canvas_size", (800, 800))
         self.c.viewer.camera.zoom = 0.7 * min(canvas) / max(span, 0.5)
 
-    # -- focus mode ---------------------------------------------------
-    def _on_focus_changed(self, *_) -> None:
-        self._refresh_focus()
-
-    def _refresh_focus(self) -> None:
-        if self.current is None or not self.focus_check.isChecked():
-            self.focused = None
-        else:
-            self.focused = self._neighbourhood([self.current])
-        self._apply_visibility()
-
-    def _neighbourhood(self, ids) -> set[int]:
-        """The given trees plus every tree whose points come within reach."""
+    def on_hide_neighbours(self) -> None:
+        """Toggle hiding every tree currently neighbouring the tree under
+        review — shows them again if they're all already hidden."""
+        if self.current is None:
+            self.c.viewer.status = (
+                "No tree under review — press Space or click a table row"
+            )
+            return
         from . import analysis
 
-        focus = {int(t) for t in ids}
-        for tid in list(focus):
-            focus |= analysis.neighbours_by_points(
-                self.c.cloud, tid, self.focus_margin.value()
-            )
-        return focus
+        neighbours = analysis.neighbours_by_points(
+            self.c.cloud, self.current, self.focus_margin.value()
+        )
+        if neighbours and neighbours <= self.hidden_ids:
+            self.hidden_ids -= neighbours
+            verb = "Shown"
+        else:
+            self.hidden_ids |= neighbours
+            verb = "Hid"
+        self._refresh_tree_table()  # updates the 👁 checkboxes to match
+        self._apply_visibility()
+        self.c.viewer.status = f"{verb} {len(neighbours)} neighbouring tree(s)"
 
     def _apply_visibility(self) -> None:
         if self.c.layer is None or not len(self.c.layer.data):
             return
+        hidden = (
+            np.isin(self.c.cloud.labels, list(self.hidden_ids))
+            if self.hidden_ids else None
+        )
         self.c.layer.shown = visibility_mask(
             self.c.cloud.labels,
             hide_unassigned=not self.show_unassigned.isChecked(),
-            focus=self.focused,
+            hidden=hidden,
+            cross_section=self._cross_section_mask(),
         )
 
     def _on_show_unassigned(self, checked: bool) -> None:
@@ -572,12 +630,96 @@ class SegFixWidget(QWidget):
             else "Unassigned/noise points hidden"
         )
 
+    # -- cross section --------------------------------------------------
+    CROSS_SECTION_STEPS = 1000
+
+    def _cross_axis_bounds(self) -> tuple[float, float]:
+        """(lo, hi) of the current cloud's extent along the selected axis."""
+        coords = self.c.cloud.coords
+        if not len(coords):
+            return 0.0, 1.0
+        axis = self.cross_axis_combo.currentIndex()
+        lo, hi = float(coords[:, axis].min()), float(coords[:, axis].max())
+        return (lo, hi) if hi > lo else (lo, lo + 1.0)
+
+    def _reset_cross_section_range(self) -> None:
+        """(Re)initialise the slab to the current cloud's full extent on the
+        selected axis — called on axis change, Reset, and on a new cloud."""
+        self._cross_lo, self._cross_hi = self._cross_axis_bounds()
+        for slider, value in (
+            (self.cross_min_slider, 0),
+            (self.cross_max_slider, self.CROSS_SECTION_STEPS),
+        ):
+            slider.blockSignals(True)
+            slider.setRange(0, self.CROSS_SECTION_STEPS)
+            slider.setValue(value)
+            slider.blockSignals(False)
+        self._update_cross_range_label()
+
+    def _slider_to_value(self, slider_value: int) -> float:
+        lo, hi = self._cross_lo, self._cross_hi
+        return lo + (hi - lo) * (slider_value / self.CROSS_SECTION_STEPS)
+
+    def _on_cross_section_toggled(self, checked: bool) -> None:
+        self._apply_visibility()
+        self.c.viewer.status = (
+            "Cross section on — only the slab is shown/selectable"
+            if checked else "Cross section off"
+        )
+
+    def _on_cross_axis_changed(self, _index: int) -> None:
+        self._reset_cross_section_range()
+        self._apply_visibility()
+
+    def _on_cross_reset(self) -> None:
+        self._reset_cross_section_range()
+        self._apply_visibility()
+
+    def _on_cross_range_changed(self, _value: int) -> None:
+        # Keep min <= max by nudging the other slider if a drag crosses it;
+        # setValue re-enters this handler, which then just updates in place.
+        if self.cross_min_slider.value() > self.cross_max_slider.value():
+            if self.sender() is self.cross_min_slider:
+                self.cross_max_slider.setValue(self.cross_min_slider.value())
+            else:
+                self.cross_min_slider.setValue(self.cross_max_slider.value())
+            return
+        self._update_cross_range_label()
+        self._apply_visibility()
+
+    def _update_cross_range_label(self) -> None:
+        axis_name = "XYZ"[self.cross_axis_combo.currentIndex()]
+        lo = self._slider_to_value(self.cross_min_slider.value())
+        hi = self._slider_to_value(self.cross_max_slider.value())
+        self.cross_range_label.setText(f"{axis_name}: {lo:.2f} – {hi:.2f} m")
+
+    def _cross_section_mask(self) -> np.ndarray | None:
+        """Per-point mask, True inside the current slab; None when off."""
+        if not self.cross_box.isChecked() or not len(self.c.cloud.coords):
+            return None
+        axis = self.cross_axis_combo.currentIndex()
+        lo = self._slider_to_value(self.cross_min_slider.value())
+        hi = self._slider_to_value(self.cross_max_slider.value())
+        coords_axis = self.c.cloud.coords[:, axis]
+        return (coords_axis >= lo) & (coords_axis <= hi)
+
     # -- done tracking ------------------------------------------------
     def _on_tree_item_changed(self, item) -> None:
-        if self._table_updating or item.column() != 0:
+        if self._table_updating:
             return
         tid = self._row_id(item.row())
-        self._mark_done(tid, item.checkState() == Qt.Checked)
+        if item.column() == 0:
+            self._mark_done(tid, item.checkState() == Qt.Checked)
+        elif item.column() == self.HIDE_COL:
+            self._set_hidden(tid, item.checkState() == Qt.Checked)
+
+    def _set_hidden(self, tid: int, hidden: bool) -> None:
+        if hidden:
+            self.hidden_ids.add(tid)
+        else:
+            self.hidden_ids.discard(tid)
+        self._apply_visibility()
+        self.c.viewer.status = f"Tree {tid} {'hidden' if hidden else 'shown'}"
 
     def _mark_done(self, tid: int, done: bool) -> None:
         if done:
@@ -714,7 +856,7 @@ class SegFixWidget(QWidget):
         return np.unique(labels[(labels != UNASSIGNED) & (labels != NOISE)])
 
     def _update_current_info(self) -> None:
-        self._update_suggestion_ui()
+        self._update_neighbour_picker()
         if self.current is None:
             self.current_swatch.setStyleSheet(
                 "background: none; border: 1px dashed gray;"
@@ -731,76 +873,37 @@ class SegFixWidget(QWidget):
         self.current_label.setText(f"tree {self.current} · {n:,} points")
         self.add_btn.setText(f"Add selection to tree {self.current} (A)")
 
-    def _update_suggestion_ui(self) -> None:
-        sug = (
-            self.suggestions.get(self.current)
-            if self.current is not None
-            else None
-        )
-        show = sug is not None and bool(
-            np.any(self.c.cloud.labels == sug[0])
-        )
-        self.suggest_label.setVisible(show)
-        self.accept_btn.setVisible(show)
-        if show:
-            host, gap = sug
-            self.suggest_label.setText(
-                f"⚑ fragment of tree {host}? ({gap * 100:.0f} cm gap)"
-            )
-            self.accept_btn.setText(f"Absorb into tree {host} (Y)")
-
-    # -- fragment suggestions ------------------------------------------
-    def on_scan_fragments(self) -> None:
-        """Scan for floating/tiny trees touching a host; flag them ⚑."""
+    def _update_neighbour_picker(self) -> None:
+        """Rebuild the "send selection to neighbour" button row for the
+        current tree — a quicker path than switching current tree and
+        pressing Add when moving a patch to an adjacent tree."""
+        while self.neighbour_row.count():
+            item = self.neighbour_row.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.deleteLater()
+        if self.current is None:
+            self.neighbour_label.setVisible(False)
+            return
         from . import analysis
 
-        self.suggestions = analysis.find_fragments(self.c.cloud)
-        self._refresh_tree_table()
-        if not self.suggestions:
-            self.c.viewer.status = (
-                "No fragment suggestions — no floating or tiny tree touches "
-                "another tree"
-            )
-            return
-        self.c.viewer.status = (
-            f"{len(self.suggestions)} fragment(s) flagged ⚑ in the table — "
-            "Y absorbs the current one into its host"
+        neighbours = analysis.neighbours_by_points(
+            self.c.cloud, self.current, self.focus_margin.value()
         )
-        self._set_current(self._next_suggested())
-
-    def _next_suggested(self) -> int | None:
-        """Best remaining suggestion whose fragment and host still exist."""
-        labels = self.c.cloud.labels
-        for frag, (host, _gap) in self.suggestions.items():
-            if np.any(labels == frag) and np.any(labels == host):
-                return frag
-        return None
-
-    def on_accept_suggestion(self) -> None:
-        """Y: merge the current fragment into its suggested host."""
-        sug = (
-            self.suggestions.get(self.current)
-            if self.current is not None
-            else None
-        )
-        if sug is None:
-            self.c.viewer.status = (
-                "No fragment suggestion for this tree — press F to scan"
+        self.neighbour_label.setVisible(bool(neighbours))
+        for nid in sorted(neighbours):
+            rgba = colors_for_labels(
+                np.array([nid]), self.c.cloud.label_colors
+            )[0]
+            r, g, b = (int(v * 255) for v in rgba[:3])
+            btn = QPushButton(f"→ {nid}")
+            btn.setStyleSheet(f"border-left: 4px solid rgb({r},{g},{b});")
+            btn.setToolTip(f"Move the current selection to tree {nid}")
+            btn.clicked.connect(
+                lambda _checked=False, n=nid: self.on_send_to_neighbour(n)
             )
-            return
-        host, _gap = sug
-        frag = self.current
-        del self.suggestions[frag]
-        if not np.any(self.c.cloud.labels == host):
-            self.c.viewer.status = (
-                f"Host tree {host} no longer exists — press F to rescan"
-            )
-            self._update_current_info()
-            return
-        self._apply(ops.absorb_trees(self.c.cloud, [frag], host))
-        nxt = self._next_suggested()
-        if nxt is not None:
-            self._set_current(nxt)
+            self.neighbour_row.addWidget(btn)
+        self.neighbour_row.addStretch()
 
     def _require_selection(self) -> np.ndarray | None:
         idx = self.c.selected_indices()
@@ -827,17 +930,12 @@ class SegFixWidget(QWidget):
             return
         self._apply(ops.reassign(self.c.cloud, idx, tid), idx)
 
-    def on_absorb(self) -> None:
-        """Whole trees touched by the selection → the current tree."""
-        tid = self._require_current()
-        if tid is None:
-            return
+    def on_send_to_neighbour(self, target_id: int) -> None:
+        """Selection → a neighbouring tree, without switching current."""
         idx = self._require_selection()
         if idx is None:
             return
-        self._apply(
-            ops.absorb_trees(self.c.cloud, self._selected_trees(idx), tid), idx
-        )
+        self._apply(ops.reassign(self.c.cloud, idx, target_id), idx)
 
     def on_create_new(self) -> None:
         idx = self._require_selection()
@@ -875,71 +973,6 @@ class SegFixWidget(QWidget):
         self._update_info()  # rebuilds the table; re-syncs focus/bbox/current
         self._update_selection()
 
-    # -- seeds + grow -------------------------------------------------
-    def on_add_seed(self) -> None:
-        idx = self._require_selection()
-        if idx is None:
-            return
-        self.seeds.append(idx)
-        self.c.layer.selected_data = set()
-        self._refresh_seed_markers()
-        self.seed_info.setText(f"{len(self.seeds)} seed(s)")
-        self.c.viewer.status = (
-            f"Seed {len(self.seeds)}: {idx.size} points. "
-            "One seed per tree, then Grow (G)."
-        )
-
-    def on_clear_seeds(self) -> None:
-        self.seeds = []
-        self.seed_info.setText("no seeds")
-        self._refresh_seed_markers()
-
-    def _refresh_seed_markers(self) -> None:
-        viewer = self.c.viewer
-        if "seeds" in viewer.layers:
-            viewer.layers.remove("seeds")
-        if not self.seeds:
-            self.c.lasso.reassert()  # layer removal re-enabled the camera
-            return
-        coords = np.concatenate([self.c.cloud.coords[g] for g in self.seeds])
-        colors = sum(
-            (
-                [self.SEED_COLORS[i % len(self.SEED_COLORS)]] * len(g)
-                for i, g in enumerate(self.seeds)
-            ),
-            [],
-        )
-        size = float(np.max(self.c.layer.size)) * 5 if len(self.c.layer.data) else 0.05
-        viewer.add_points(
-            coords, name="seeds", size=size, face_color=colors,
-            border_width=0, border_color="transparent",
-        )
-        viewer.layers.selection.active = self.c.layer
-        self.c.lasso.reassert()  # adding a layer re-enabled the camera
-
-    def on_grow(self) -> None:
-        if len(self.seeds) < 2:
-            self.c.viewer.status = (
-                "Add at least two seeds first: lasso a trunk patch, press D"
-            )
-            return
-        seed_idx = np.concatenate(self.seeds)
-        msg, grown = ops.grow_from_seeds(
-            self.c.cloud,
-            self.seeds,
-            k=self.grow_k.value(),
-            max_edge=self.grow_link.value() or None,
-            claim_unassigned=self.grow_claim.isChecked(),
-        )
-        # Seeds are kept so the result can be inspected and re-grown with
-        # different k / max-link settings; Clear drops them when done.
-        self._apply(msg, seed_idx)
-        if grown.size:
-            # Select the grown points (after _apply, which clears selection)
-            # so the result is highlighted for inspection.
-            self.c.layer.selected_data = set(int(i) for i in grown)
-            self._update_selection()
-
     # -- history -----------------------------------------------------
     def on_undo(self) -> None:
         desc = self.c.cloud.undo()
@@ -952,6 +985,7 @@ class SegFixWidget(QWidget):
     # -- save --------------------------------------------------------
     def on_save(self) -> None:
         if self.c.on_save_override is not None:
+            busy(self.c.viewer, "Saving…")
             try:
                 msg = self.c.on_save_override()
             except Exception as exc:
@@ -962,23 +996,14 @@ class SegFixWidget(QWidget):
             self._update_info()
             return
         if not self.c.save_path:
-            self.on_save_as()
+            self.c.viewer.status = "Nothing loaded to save"
             return
         self._do_save(self.c.save_path)
-
-    def on_save_as(self) -> None:
-        start = self.c.save_path or os.getcwd()
-        path, _ = QFileDialog.getSaveFileName(
-            self, "Save point cloud", start,
-            "Point clouds (*.las *.laz *.ply)",
-        )
-        if path:
-            self.c.save_path = path
-            self._do_save(path)
 
     def _do_save(self, path: str) -> None:
         from . import io
 
+        busy(self.c.viewer, f"Saving to {path}…")
         try:
             io.save(self.c.cloud, path)
         except Exception as exc:  # surface IO errors instead of crashing
@@ -998,20 +1023,17 @@ def bind_shortcuts(viewer, panel: SegFixWidget) -> None:
     """
     bindings = {
         "l": lambda v: panel.lasso_btn.toggle(),
+        "Shift-l": lambda v: panel.tree_lasso_btn.toggle(),
         "Escape": lambda v: panel.on_move_mode(),
         "Space": lambda v: panel.on_done_next(),
         "Left": lambda v: panel._step(-1),
         "Right": lambda v: panel._step(1),
         "a": lambda v: panel.on_add(),
-        "Shift-a": lambda v: panel.on_absorb(),
         "n": lambda v: panel.on_create_new(),
         "u": lambda v: panel.on_unassign(),
         "x": lambda v: panel.on_noise(),
         "h": lambda v: panel.show_unassigned.toggle(),
-        "f": lambda v: panel.on_scan_fragments(),
-        "y": lambda v: panel.on_accept_suggestion(),
-        "d": lambda v: panel.on_add_seed(),
-        "g": lambda v: panel.on_grow(),
+        "c": lambda v: panel.cross_box.setChecked(not panel.cross_box.isChecked()),
         "Control-z": lambda v: panel.on_undo(),
         "Control-Shift-z": lambda v: panel.on_redo(),
         "Control-s": lambda v: panel.on_save(),

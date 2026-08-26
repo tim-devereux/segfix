@@ -1,0 +1,180 @@
+"""Startup picker: choose a recent project or import a new file/directory.
+
+Shown when segfix is launched with no path argument, so there's a way to
+pick what to open without needing to know the CLI flags up front. Providing
+a path on the command line (``segfix cloud.ply`` / ``--project DIR``) skips
+this entirely — it's purely a convenience for interactive launches.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+from qtpy.QtCore import Qt
+from qtpy.QtWidgets import (
+    QAbstractItemView,
+    QDialog,
+    QFileDialog,
+    QHBoxLayout,
+    QLabel,
+    QListWidget,
+    QListWidgetItem,
+    QMessageBox,
+    QPushButton,
+    QVBoxLayout,
+)
+
+from . import registry, workspace
+
+_ICONS = {"workspace": "🗂", "project": "📁", "file": "📄"}
+
+
+class StartupDialog(QDialog):
+    def __init__(self) -> None:
+        super().__init__()
+        self.setWindowTitle("segfix")
+        self.resize(560, 380)
+        # What main() should open, what should be recorded in the registry,
+        # and which kind it is — see create_workspace()'s docstring for why
+        # the first two differ for a new workspace (open the data file
+        # inside it, but register the workspace folder itself).
+        self.open_path: str | None = None
+        self.registry_path: str | None = None
+        self.kind: str | None = None
+
+        layout = QVBoxLayout(self)
+        layout.addWidget(QLabel("Recent projects:"))
+
+        self.list = QListWidget()
+        self.list.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.list.itemDoubleClicked.connect(self._on_choose)
+        layout.addWidget(self.list, stretch=1)
+        self._populate()
+
+        hint = QLabel(
+            "Double-click a recent project, or start a new one by importing "
+            "a point cloud file — a private copy is made in a new project "
+            "folder, and edits are saved to that copy, never the original.\n"
+            "\"Open Project Folder…\" is for the separate forestry-QA "
+            "workflow: a directory of per-tree PLY files."
+        )
+        hint.setWordWrap(True)
+        hint.setStyleSheet("color: gray;")
+        layout.addWidget(hint)
+
+        row = QHBoxLayout()
+        new_btn = QPushButton("New Project…")
+        new_btn.clicked.connect(self._new_project)
+        row.addWidget(new_btn)
+        dir_btn = QPushButton("Open Project Folder…")
+        dir_btn.clicked.connect(self._browse_dir)
+        row.addWidget(dir_btn)
+        row.addStretch()
+        open_btn = QPushButton("Open")
+        open_btn.clicked.connect(self._on_choose)
+        row.addWidget(open_btn)
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.clicked.connect(self.reject)
+        row.addWidget(cancel_btn)
+        layout.addLayout(row)
+
+    def _populate(self) -> None:
+        self.list.clear()
+        for entry in registry.load_registry():
+            mark = _ICONS.get(entry["type"], "📄")
+            item = QListWidgetItem(f"{mark}  {entry['path']}")
+            item.setData(Qt.UserRole, entry)
+            self.list.addItem(item)
+        if self.list.count():
+            self.list.setCurrentRow(0)
+
+    def _new_project(self) -> None:
+        source, _ = QFileDialog.getOpenFileName(
+            self, "Import point cloud", str(Path.home()),
+            "Point clouds (*.las *.laz *.ply)",
+        )
+        if not source:
+            return
+        parent, _ = str(Path.home()), None
+        parent = QFileDialog.getExistingDirectory(
+            self, "Choose where to create the project folder", parent,
+        )
+        if not parent:
+            return
+
+        stem = Path(source).stem
+        candidate = Path(parent) / stem
+        suffix = 1
+        while candidate.exists() and any(candidate.iterdir()):
+            suffix += 1
+            candidate = Path(parent) / f"{stem}_{suffix}"
+
+        try:
+            data_path = workspace.create_workspace(source, candidate)
+        except OSError as exc:
+            QMessageBox.critical(self, "Import failed", str(exc))
+            return
+
+        self.open_path = str(data_path)
+        self.registry_path = str(candidate)
+        self.kind = "workspace"
+        self.accept()
+
+    def _browse_dir(self) -> None:
+        path = QFileDialog.getExistingDirectory(
+            self, "Open project folder", str(Path.home()),
+        )
+        if path:
+            self.open_path = self.registry_path = path
+            self.kind = "project"
+            self.accept()
+
+    def _on_choose(self, *_args) -> None:
+        item = self.list.currentItem()
+        if item is None:
+            return
+        entry = item.data(Qt.UserRole)
+        kind = entry["type"]
+        if kind == "workspace":
+            try:
+                self.open_path = str(workspace.data_file(entry["path"]))
+            except (OSError, KeyError, ValueError) as exc:
+                QMessageBox.critical(
+                    self, "Can't open project",
+                    f"{entry['path']} doesn't look like a valid project "
+                    f"folder anymore: {exc}",
+                )
+                return
+        else:
+            self.open_path = entry["path"]
+        self.registry_path = entry["path"]
+        self.kind = kind
+        self.accept()
+
+
+_app = None  # kept alive for the process's lifetime once created here — a
+# QApplication with no surviving Python reference gets garbage-collected
+# immediately (PyQt/PySide tear down the underlying app with it), which
+# crashes the very next QWidget construction, including napari's own.
+
+
+def choose_project() -> tuple[str, str, str] | None:
+    """Show the startup dialog. Returns ``(open_path, registry_path, kind)``
+    — the path to actually open, the path to remember in the registry
+    (differs for a new workspace: open its data file, register its folder),
+    and ``kind`` (see :func:`registry.add_entry`) — or ``None`` if the user
+    cancelled without choosing anything.
+
+    ``napari`` must already be imported by the time this runs (see
+    ``app.py``'s comment) — its own ``get_qapp()`` applies a Wayland+NVIDIA
+    OpenGL workaround that has to happen before the first QApplication is
+    created, whether that's this dialog's or napari's own Viewer later.
+    """
+    global _app
+    from napari.qt import get_qapp
+
+    _app = get_qapp()
+    dialog = StartupDialog()
+    if dialog.exec() == QDialog.Accepted and dialog.open_path:
+        return dialog.open_path, dialog.registry_path, dialog.kind
+    return None

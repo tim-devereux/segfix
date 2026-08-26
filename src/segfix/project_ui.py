@@ -24,7 +24,7 @@ from . import overlays
 from .icons import icon
 from .project import Project
 from .trees import load_scene, save_scene
-from .viewer import add_cloud_layer
+from .viewer import add_cloud_layer, busy
 
 OVERLAY_RADIUS = 10.0
 
@@ -39,6 +39,10 @@ class ProjectController:
         self.seg = seg_controller
         self.point_size = point_size
         self.scene = None
+        # Set by the widget to refresh its "Done" column after a save —
+        # fires regardless of which Save button triggered it (this one, or
+        # the shared segfix panel's), since both route through on_save_override.
+        self.on_saved = None
         self.seg.on_save_override = self._save
 
     def load_tree(self, entry) -> str:
@@ -75,7 +79,10 @@ class ProjectController:
     def _save(self) -> str:
         if self.scene is None:
             return "Nothing loaded to save"
-        return save_scene(self.seg.cloud, self.scene)
+        msg = save_scene(self.seg.cloud, self.scene)
+        if self.on_saved is not None:
+            self.on_saved()
+        return msg
 
 
 class ProjectWidget(QWidget):
@@ -101,6 +108,7 @@ class ProjectWidget(QWidget):
         self.table.horizontalHeader().setSectionResizeMode(
             len(self.COLUMNS) - 1, QHeaderView.Stretch
         )
+        self.table.setMaximumHeight(200)
         self.table.cellDoubleClicked.connect(lambda *_: self.on_load_tree())
         layout.addWidget(self.table)
 
@@ -108,7 +116,6 @@ class ProjectWidget(QWidget):
         for text, slot, name in [
             ("Load Tree", self.on_load_tree, "folder"),
             ("Reload Overlays", self.on_overlays, "redo"),
-            ("Save Fixed", self.on_save, "save"),
         ]:
             btn = QPushButton(text)
             btn.setIcon(icon(name))
@@ -117,6 +124,7 @@ class ProjectWidget(QWidget):
             row.addWidget(btn)
         layout.addLayout(row)
 
+        controller.on_saved = self._populate
         self._populate()
 
     def _populate(self) -> None:
@@ -143,11 +151,9 @@ class ProjectWidget(QWidget):
         if entry is None:
             self.c.viewer.status = "Select a tree row first"
             return
+        busy(self.c.viewer, f"Loading tree {entry.tree_id}…")
         self.c.viewer.status = self.c.load_tree(entry)
 
     def on_overlays(self) -> None:
+        busy(self.c.viewer, "Loading overlays…")
         self.c.viewer.status = self.c.load_overlays()
-
-    def on_save(self) -> None:
-        self.c.viewer.status = self.c.scene and self.c._save() or "Nothing loaded"
-        self._populate()

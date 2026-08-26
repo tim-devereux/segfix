@@ -29,47 +29,48 @@ segfix sample.las
 The per-point tree ID field is auto-detected (`treeID`, `PredInstance`,
 `label`, …); override with `--label-field NAME` if needed.
 
-### RGB-segmented clouds (raycloudtools)
+Running `segfix` with **no path** opens a startup dialog instead: double-click
+a recent project to reopen it, or click **New Project…** to import a point
+cloud file. Importing copies the file into a new project folder (created
+next to wherever you choose) and opens that copy — edits are always saved to
+the copy, never the original source file. ("Open Project Folder…" is the
+separate `--project DIR` forestry-QA workflow below, a directory of per-tree
+PLY files rather than one imported cloud.)
 
-Binary PLYs where the segmentation is encoded as **per-point colour** (each
-tree a distinct RGB, e.g. raycloudtools output with `double x/y/z`, normals,
-`time`, `rgba`) are detected automatically — no label field needed. Each
-distinct colour becomes a tree; pure black `(0,0,0)` is treated as
-unsegmented. Trees render in their original colours, and **Save** writes the
-file back in the same raycloud format, recolouring edited points (merged trees
-take the surviving tree's colour; new/split trees get a fresh distinct colour).
+Every project opened this way — or given directly on the command line, which
+skips the dialog entirely and edits the given file in place as before — is
+recorded in `~/.config/segfix/registry.json` (a plain JSON file, not a
+database) so it shows up in the "Recent projects" list next time.
+
+### Binary PLYs: a tree table by default
+
+Opening a **binary PLY** (RGB-segmented or with a label field) shows a table
+of every tree in the file instead of loading the whole cloud at once —
+double-click a row to load that tree plus its spatial neighbours for editing.
+This is what makes multi-million-point clouds open instantly: the file is
+memory-mapped and only the current tree's neighbourhood is ever loaded into
+the 3D view.
 
 ```bash
 segfix WYTHAM_CHERLET_raycloud_segmented.ply
-# 14M-point clouds load in a couple of seconds; for snappier rotation:
-segfix WYTHAM_CHERLET_raycloud_segmented.ply --max-points 2000000
 ```
 
-`--max-points` subsamples for display only; note that saving then writes just
-the loaded (subsampled) points, so omit it when producing a corrected file.
+**Save** (or the left-dock Save button) writes back only the points whose
+tree changed since the last save — not a full-file rewrite — so it stays
+fast regardless of file size, and captures edits made across *every* tree
+visited in the session, not just the one currently on screen.
 
-### Crop mode — edit a huge cloud in chunks
+For RGB-segmented PLYs specifically (e.g. raycloudtools output with
+`double x/y/z`, normals, `time`, `rgba`), the segmentation is encoded as
+**per-point colour** and detected automatically — no label field needed. Each
+distinct colour becomes a tree; pure black `(0,0,0)` is treated as
+unsegmented. Trees render in their original colours, and saved edits
+recolour points (merged trees take the surviving tree's colour; new/split
+trees get a fresh distinct colour).
 
-For large clouds (millions of points) it's faster to fix one region at a time.
-Crop mode memory-maps the file, loads only the points in a chosen tile, and
-writes each fixed tile back into an output copy — no full in-memory rewrite.
-
-```bash
-segfix WYTHAM_CHERLET_raycloud_segmented.ply --crop
-segfix WYTHAM_CHERLET_raycloud_segmented.ply --crop --output corrected.ply
-```
-
-- The **tiles** dock (left) shows the cloud's XY extent. Set a grid (e.g. 4×4)
-  and a **context margin** (surrounding points shown for reference but not
-  saved), click *Make grid*, then double-click a tile to load it.
-- Fix it with the segfix panel (lasso + add/absorb/split/delete), then
-  *Save Tile* (or `Ctrl+S`) to write just that tile's points back — or
-  **Save & Next** to save and jump straight to the next unfinished tile.
-  Saved tiles get a ✓; later tiles load with earlier edits already applied.
-- Tile load/save on the 14M-point Wytham cloud take well under a second each.
-
-Note: a tree straddling a tile boundary is fixed per tile (the margin lets you
-see the boundary); only the points inside the tile box are written on save.
+`--max-points N` subsamples the display and only applies to LAS/LAZ or ASCII
+PLY input, which can't be memory-mapped this way and still load eagerly in
+full — a binary PLY never needs it.
 
 ## Project mode (forestry QA workflow)
 
@@ -119,9 +120,9 @@ done checkbox, and progress is saved to a `<cloud>.segfix.json` sidecar so a
 half-finished plot resumes where you left off.
 
 1. Press **Space** (or click a table row) to start reviewing. The camera
-   flies to the tree, a wireframe box marks it, and **focus mode** hides
-   everything except the tree, its neighbouring trees (those whose points
-   come within the *reach* distance) and the grey unassigned pool.
+   flies to the tree and a wireframe box marks it. To declutter a crowded
+   view, use the 👁 column in the table (or **Hide all neighbours** in the
+   Current tree panel) to hide specific or all neighbouring trees.
 2. Inspect it. If it's correct, press **Space** — the tree is marked done,
    progress is saved, and the next unfinished tree loads. That's the loop.
 3. If it needs fixing, **select** points with the lasso: press **L**, drag a
@@ -133,18 +134,13 @@ half-finished plot resumes where you left off.
    | `Space` | Mark current tree done, jump to next unfinished |
    | `←` / `→` | Previous / next tree (without marking done) |
    | `A` | Add selection to the current tree (missing branches, unassigned canopy) |
-   | `Shift+A` | Absorb whole trees: every tree the selection touches merges into the current one (fix over-segmentation by lassoing a few points of each fragment) |
    | `N` | Split selection off as a new tree (it joins the queue unreviewed) |
    | `U` | Unassign selection — or the whole current tree if nothing is selected |
    | `X` | Mark selection as noise — or the whole current tree if nothing is selected (dismiss a bush/wall in one key) |
-   | `F` | Find fragments: flag ⚑ floating/tiny trees touching a host tree |
-   | `Y` | Accept the current tree's ⚑ suggestion — absorb it into its host |
    | `H` | Show/hide the unassigned + noise points |
-   | `D` | Add the selection as a grow seed |
-   | `G` | Grow from seeds |
    | `Delete` | Same as `X` (mark noise) |
    | `Ctrl+Z` / `Ctrl+Shift+Z` | Undo / Redo |
-   | `Ctrl+S` | Save |
+   | `Ctrl+S` | Save Project |
 
    To move stray points *to a neighbour* instead, click the neighbour's row
    (one click — it becomes current), lasso the strays, press `A`.
@@ -152,37 +148,8 @@ half-finished plot resumes where you left off.
    trees: with no tree selected everything is shown — lasso and press `N`
    to create them (they join the queue).
 
-### Untangling intermingled crowns
-
-For two (or more) trees whose branches interweave (the *Untangle* box,
-collapsed by default):
-
-1. Review one of the trees involved — focus mode already hides bystander
-   trees so stray lassos can't touch them.
-2. Lasso a small patch on each trunk, pressing **D** after each — the seeds
-   show as coloured markers, one colour per future tree.
-3. Press **G**. Every point of the trees the seeds touch is reassigned to the
-   seed it is closest to *through the cloud* (shortest path over a
-   k-nearest-neighbour graph), so branches follow their physical attachment
-   instead of straight-line distance to a crown centre. This both splits a
-   fused tree (one label, two seeds) and re-partitions a mislabelled tangle.
-   The grown points stay selected for inspection; seeds are kept so you can
-   tweak *k* / *max link* and re-grow, then Clear.
-
-Growth parameters (in the Untangle box):
-
-- **k** — neighbours per point in the graph (default 8). Lower follows thin
-  strands more strictly; higher tolerates gappy scans but bridges more.
-- **max link** — severs graph links longer than this, so growth can't leak
-  across branches that merely touch (the main failure mode). Points cut off
-  from every seed keep their current label. Try 0.2–0.5 m for tangled
-  crowns; *off* = unlimited.
-- **Claim unassigned** — also grow over unassigned points around the
-  involved trees (bounding box + 2 m), pulling unsegmented canopy into the
-  nearest tree.
-
 5. **Save** writes back preserving the original header (CRS, scale, offset)
-   and extra attributes; in crop/project mode it saves the tile/tree instead.
+   and extra attributes; in project mode it saves per-tree files instead.
 
 ## Layout
 
@@ -198,9 +165,12 @@ Growth parameters (in the Untangle box):
 | `trees.py` | load many per-tree PLYs into one cloud; save + removed tracking |
 | `overlays.py` | non-seg / removed-point cylinder overlays |
 | `project_ui.py` | tree table + project controller |
-| `crop.py` | crop mode: memory-mapped tile load + write-back |
-| `crop_ui.py` | tile grid table + crop controller |
-| `app.py` | `segfix` CLI entry point (single-file / `--project` / `--crop`) |
+| `treecatalog.py` | default mode: memory-mapped tree-label grouping, neighbour load + write-back |
+| `scene_ui.py` | tree table + scene controller for the default mode |
+| `registry.py` | on-disk list of recently opened files/projects |
+| `workspace.py` | project folders: copy an imported file, never touch the source |
+| `startup_ui.py` | startup dialog: pick a recent entry, new project, or `--project` folder |
+| `app.py` | `segfix` CLI entry point (default table mode / `--project`) |
 
 ## Tests
 

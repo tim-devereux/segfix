@@ -11,6 +11,63 @@ import numpy as np
 
 from .model import NOISE, UNASSIGNED, PointCloud
 
+
+def busy(viewer, message: str) -> None:
+    """Show a status message and force it to paint immediately.
+
+    A plain ``viewer.status = message`` only queues a repaint — it won't
+    actually appear until control returns to the Qt event loop, which is too
+    late if the very next line is a blocking load/save. Call this right
+    before such a call so there's visible feedback while it runs.
+    """
+    viewer.status = message
+    from qtpy.QtWidgets import QApplication
+
+    QApplication.processEvents()
+
+
+def gpu_renderer_info(viewer) -> str | None:
+    """Best-effort OpenGL renderer string for the canvas's active GPU
+    context (e.g. "NVIDIA RTX A1000 Laptop GPU" vs. a software/Mesa
+    renderer) — lets a user confirm whether a GPU-offload env var actually
+    took effect, without shelling out to ``glxinfo``. ``None`` if it can't
+    be determined (context not ready yet, PyOpenGL missing, ...).
+
+    Deliberately does *not* call ``native.makeCurrent()`` — vispy already
+    has its own context current by the time a layer's been added, and
+    forcing it again here (bypassing vispy's own context-tracking) corrupts
+    that tracking: PyOpenGL's ``contextdata`` loses track of the "current"
+    context, and the very next draw call crashes with "Attempt to retrieve
+    context when no valid context" (a real crash this caused in testing).
+    Just read whatever context vispy has already made current.
+    """
+    try:
+        from OpenGL import GL
+
+        renderer = GL.glGetString(GL.GL_RENDERER)
+        return renderer.decode() if renderer else None
+    except Exception:
+        return None
+
+
+def add_gpu_status_widget(viewer) -> None:
+    """Show the active OpenGL renderer as a permanent widget in napari's own
+    status bar, next to its "activity" toggle button — a persistent way to
+    confirm whether a GPU-offload env var (e.g. ``__NV_PRIME_RENDER_OFFLOAD``)
+    actually took effect, without shelling out to ``glxinfo``.
+    """
+    from qtpy.QtWidgets import QLabel
+
+    gpu = gpu_renderer_info(viewer)
+    label = QLabel(f"GPU: {gpu}" if gpu else "GPU: unknown")
+    label.setStyleSheet("color: gray; padding: 0 6px;")
+    label.setToolTip(
+        "OpenGL renderer for this canvas. If this shows an integrated GPU "
+        "(e.g. Mesa Intel) but you have a discrete one, launch with "
+        "__NV_PRIME_RENDER_OFFLOAD=1 __GLX_VENDOR_LIBRARY_NAME=nvidia."
+    )
+    viewer.window._qt_window.statusBar().addPermanentWidget(label)
+
 # Muted, recessive greys: unassigned/noise points (whole ground + understory
 # on a big plot) are context and shouldn't compete with the tree colours.
 UNASSIGNED_COLOR = np.array([0.4, 0.41, 0.43, 1.0], dtype=np.float32)
@@ -84,11 +141,14 @@ def colors_for_labels(labels: np.ndarray, label_colors=None) -> np.ndarray:
 
 
 def visibility_mask(labels: np.ndarray, isolated=None, hide_unassigned=False,
-                    hidden=None, focus=None):
+                    hidden=None, focus=None, cross_section=None):
     """Per-point ``shown`` mask combining isolate mode, hide-unassigned,
-    manually hidden points (``hidden`` is a per-point boolean mask), and
-    focus mode (``focus`` tree IDs stay visible along with unassigned
-    points; other trees and noise are hidden)."""
+    manually hidden points (``hidden`` is a per-point boolean mask), focus
+    mode (``focus`` tree IDs stay visible along with unassigned points;
+    other trees and noise are hidden), and the cross-section tool
+    (``cross_section`` is a per-point boolean mask of points inside the
+    current slab — points outside it are hidden and thus unselectable, same
+    as any other hidden point)."""
     shown = np.ones(len(labels), dtype=bool)
     if isolated is not None:
         ids = np.fromiter(isolated, dtype=np.int64)
@@ -100,7 +160,63 @@ def visibility_mask(labels: np.ndarray, isolated=None, hide_unassigned=False,
         shown &= (labels != UNASSIGNED) & (labels != NOISE)
     if hidden is not None and len(hidden) == len(labels):
         shown &= ~hidden
+    if cross_section is not None and len(cross_section) == len(labels):
+        shown &= cross_section
     return shown
+
+
+_shown_patch_applied = False
+
+
+def _patch_napari_shown_in_full_3d() -> None:
+    """Work around a napari bug: ``Points._view_indices`` ignores ``shown``
+    whenever every dimension is displayed at once (always true for our
+    plain-3D clouds with ``ndisplay=3``).
+
+    ``_PointSliceRequest.__call__`` takes a fast path when
+    ``slice_input.not_displayed`` is empty — "if we want to display
+    everything, use all indices" — and returns every point index without
+    ever consulting ``self.shown``. That silently no-ops every
+    visibility toggle in the app (focus mode, "show unassigned", and the
+    per-tree hide checkbox) since they all work by setting ``layer.shown``.
+    Patched to still filter by ``shown`` on that path.
+    """
+    global _shown_patch_applied
+    if _shown_patch_applied:
+        return
+    try:
+        from napari.layers.points._slice import (
+            _PointSliceRequest,
+            _PointSliceResponse,
+        )
+    except ImportError:
+        return
+
+    def patched_call(self):
+        if len(self.data) == 0:
+            return _PointSliceResponse(
+                indices=np.empty(0, dtype=int),
+                size=np.empty(0, dtype=float),
+                slice_input=self.slice_input,
+                request_id=self.id,
+            )
+        not_disp = list(self.slice_input.not_displayed)
+        if not not_disp:
+            indices = np.flatnonzero(self.shown)
+            return _PointSliceResponse(
+                indices=indices,
+                size=self.size[indices],
+                slice_input=self.slice_input,
+                request_id=self.id,
+            )
+        indices, size = self._get_slice_data(not_disp)
+        return _PointSliceResponse(
+            indices=indices, size=size,
+            slice_input=self.slice_input, request_id=self.id,
+        )
+
+    _PointSliceRequest.__call__ = patched_call
+    _shown_patch_applied = True
 
 
 def add_cloud_layer(viewer, cloud: PointCloud, point_size: float = 0.01):
@@ -109,6 +225,7 @@ def add_cloud_layer(viewer, cloud: PointCloud, point_size: float = 0.01):
     ``point_size`` is in data units (metres); 1 cm suits fine LiDAR. Adjust it
     live with the segfix panel's "Point size" spinner, or override here.
     """
+    _patch_napari_shown_in_full_3d()
     # napari chokes on an empty face_color array, so colour an empty cloud with
     # a plain default; real colours are applied as soon as points are loaded.
     face_color = (
@@ -127,7 +244,12 @@ def add_cloud_layer(viewer, cloud: PointCloud, point_size: float = 0.01):
         border_width=0,
         border_color="transparent",
         features={cloud.label_field: cloud.labels.copy()},
-        shading="none",
+        # "spherical" fakes each point as a tiny shaded sphere (depth +
+        # lighting cues), which helps tell overlapping/intermingled crowns
+        # apart. Not true eye-dome lighting (a screen-space depth-buffer
+        # post-process) — napari/vispy don't have that — but a much cheaper
+        # depth cue to try first.
+        shading="spherical",
     )
     # Zoomed out, 1 cm points fall below a pixel and antialiasing fades them
     # to grey. Clamp the on-screen size and shrink the AA band so the tree
