@@ -209,6 +209,7 @@ def _patch_napari_shown_in_full_3d() -> None:
                 slice_input=self.slice_input,
                 request_id=self.id,
             )
+        # napari's own _get_slice_data already filters by self.shown here.
         indices, size = self._get_slice_data(not_disp)
         return _PointSliceResponse(
             indices=indices, size=size,
