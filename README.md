@@ -75,7 +75,7 @@ working copy, so a half-finished plot resumes where you left off.
    current. That's the loop.
 3. If it needs fixing, **select** points with the lasso: press **L**, drag a
    freehand loop (Shift adds), **Esc** to go back to navigating. The tree
-   under review is always the implicit target:
+   under review is always the implicit target.
 
    | Key | Operation |
    |-----|-----------|
