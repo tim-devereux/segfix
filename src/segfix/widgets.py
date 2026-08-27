@@ -473,13 +473,26 @@ class SegFixWidget(QWidget):
 
     def _pin_layer_mode(self, *_args) -> None:
         """Force the Points layer back to pan/zoom if anything switches it
-        into one of napari's own edit modes, and keep its status-bar help
-        text pointed at segfix's actual controls instead of napari's
-        default (which lists those other modes). See _on_cloud_changed."""
+        into one of napari's own edit modes, and blank the status-bar help
+        text napari would otherwise show for it (its default, which lists
+        those other modes). See _on_cloud_changed.
+
+        Blanking needs both ``layer.help`` *and* ``viewer.help`` — they're
+        separate properties, and only the latter actually reaches the
+        status bar (``layer.help`` alone was this method's bug for a
+        while: it looked fixed in a quick check, but the real text sticks
+        to whatever ``viewer.help`` last was, which napari sets itself, on
+        its own schedule, from the active layer's ``help`` — so this needs
+        to run every time, not just once at setup, to keep winning that
+        race. Its widget's own visibility isn't ours to control either:
+        napari's StatusBarWidget.do_layout() force-shows it back on every
+        resize regardless of any setVisible(False) — blank text is the
+        only thing that reliably stops it from being shown."""
         layer = self.c.layer
         if layer.mode != "pan_zoom":
             layer.mode = "pan_zoom"
-        layer.help = "Esc = move · L = lasso · Ctrl+L = lasso this tree"
+        layer.help = ""
+        self.c.viewer.help = ""
 
     def _update_info(self) -> None:
         cloud = self.c.cloud

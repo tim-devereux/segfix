@@ -309,10 +309,13 @@ def strip_ui(viewer) -> None:
         viewer.cursor.events.position.disconnect(viewer.update_status_from_cursor)
     except (TypeError, ValueError):
         pass  # already disconnected, or a napari version wiring it differently
+    # The help label (napari's "use <5> for transform" style hint) isn't
+    # included here: its own widget class force-shows it on every resize
+    # regardless of setVisible(False), so hiding it here would be a no-op
+    # the moment the window is touched. SegFixWidget._pin_layer_mode blanks
+    # its *text* instead (via viewer.help), which is the part that sticks.
     status_bar = viewer.window._qt_window.statusBar()
-    for name in (
-        "_layer_base", "_source_type", "_plugin_reader", "_coordinates", "_help",
-    ):
+    for name in ("_layer_base", "_source_type", "_plugin_reader", "_coordinates"):
         widget = getattr(status_bar, name, None)
         if widget is not None:
             widget.setVisible(False)
