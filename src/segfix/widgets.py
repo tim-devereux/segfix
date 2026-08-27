@@ -603,18 +603,26 @@ class SegFixWidget(QWidget):
         self.c.viewer.camera.zoom = 0.7 * min(canvas) / max(span, 0.5)
 
     def on_hide_neighbours(self) -> None:
-        """Toggle hiding every tree currently neighbouring the tree under
-        review — shows them again if they're all already hidden."""
+        """Toggle hiding every other tree currently loaded, leaving only the
+        tree under review visible — shows them again if they're all already
+        hidden.
+
+        This used to recompute "neighbouring" via a fresh distance test
+        against ``self.current`` every click. That under-hid in scene mode:
+        the loaded cloud is fixed at load time to one tree plus its one-hop
+        neighbours, but "current" moves to a different member of that group
+        as the review queue advances (Space/table clicks), and two loaded
+        trees needn't be within reach of *each other* even though both were
+        within reach of the tree originally picked. A tree loaded alongside
+        current is a neighbour regardless of which one is under review now,
+        so hide by loaded-set membership instead of recomputing distances.
+        """
         if self.current is None:
             self.c.viewer.status = (
                 "No tree under review — press Space or click a table row"
             )
             return
-        from . import analysis
-
-        neighbours = analysis.neighbours_by_points(
-            self.c.cloud, self.current, self.focus_margin.value()
-        )
+        neighbours = {int(t) for t in self.c.cloud.tree_ids} - {self.current}
         if neighbours and neighbours <= self.hidden_ids:
             self.hidden_ids -= neighbours
             verb = "Shown"
@@ -623,7 +631,7 @@ class SegFixWidget(QWidget):
             verb = "Hid"
         self._refresh_tree_table()  # updates the 👁 checkboxes to match
         self._apply_visibility()
-        self.c.viewer.status = f"{verb} {len(neighbours)} neighbouring tree(s)"
+        self.c.viewer.status = f"{verb} {len(neighbours)} other tree(s)"
 
     def _apply_visibility(self) -> None:
         if self.c.layer is None or not len(self.c.layer.data):
