@@ -64,6 +64,10 @@ class SegFixController:
         # only" lasso mode; persists across set_cloud (it's a mode choice,
         # not per-cloud state).
         self.lasso_filter = None
+        # Optional fn(indices)->None: when set (drawing a lasso section),
+        # a completed lasso is redirected here instead of becoming the
+        # selection — see _on_lasso. Also a mode choice, not per-cloud state.
+        self.on_lasso_section = None
         self.lasso = LassoTool(viewer, layer, self._on_lasso)
 
     def set_cloud(self, cloud: PointCloud, layer) -> None:
@@ -80,6 +84,9 @@ class SegFixController:
             self.on_cloud_changed()
 
     def _on_lasso(self, indices: np.ndarray, additive: bool) -> None:
+        if self.on_lasso_section is not None:
+            self.on_lasso_section(indices)
+            return
         if self.lasso_filter is not None:
             indices = self.lasso_filter(indices)
         current = set(self.layer.selected_data) if additive else set()
@@ -215,7 +222,6 @@ class SegFixWidget(QWidget):
         self.mode_label.setAlignment(Qt.AlignCenter)
         interaction.addWidget(self.mode_label)
         top_bar_row.addWidget(interaction_box)
-        self._update_mode_indicator()
 
         # -- view: what's visible/selectable, and how big it renders ---
         view_box = QGroupBox("View")
@@ -276,7 +282,46 @@ class SegFixWidget(QWidget):
         top_bar_row.addWidget(self.cross_box)
         self._cross_lo, self._cross_hi = 0.0, 1.0
         self._reset_cross_section_range()
+
+        # -- lasso section: same idea as cross section, but the kept
+        # region is a hand-drawn outline instead of an axis-aligned slab.
+        # Draw arms the shared lasso tool in "section" mode (see
+        # SegFixController.on_lasso_section); the outline it produces is
+        # a one-shot boolean mask, not a live screen region, so it stays
+        # put as the camera moves — same persistence model as the slab.
+        self.lasso_section_box = QGroupBox("Lasso section (Shift+C)")
+        self.lasso_section_box.setCheckable(True)
+        self.lasso_section_box.setChecked(False)
+        self.lasso_section_box.setToolTip(
+            "Keep only points inside a hand-drawn outline. Like cross "
+            "section, but the kept region is whatever shape you draw "
+            "instead of a slab along one axis."
+        )
+        self.lasso_section_box.toggled.connect(self._on_lasso_section_toggled)
+        lsec = QVBoxLayout(self.lasso_section_box)
+        lsec_row = QHBoxLayout()
+        self.section_draw_btn = QPushButton("Draw (Shift+L)")
+        self.section_draw_btn.setIcon(icon("lasso"))
+        self.section_draw_btn.setIconSize(QSize(18, 18))
+        self.section_draw_btn.setCheckable(True)
+        self.section_draw_btn.setToolTip(
+            "Drag on the canvas to outline the region to keep"
+        )
+        self.section_draw_btn.toggled.connect(self.on_toggle_lasso_section)
+        lsec_row.addWidget(self.section_draw_btn)
+        section_reset_btn = QPushButton("Reset")
+        section_reset_btn.setToolTip("Clear the outline — show every point again")
+        section_reset_btn.clicked.connect(self._on_lasso_section_reset)
+        lsec_row.addWidget(section_reset_btn)
+        lsec.addLayout(lsec_row)
+        self.lasso_section_label = QLabel()
+        lsec.addWidget(self.lasso_section_label)
+        top_bar_row.addWidget(self.lasso_section_box)
+        self._lasso_section_mask: np.ndarray | None = None
+        self._update_lasso_section_label()
+
         top_bar_row.addStretch()
+        self._update_mode_indicator()  # now that every mode button exists
 
         # -- fixing the current tree ----------------------------------
         sel_box = QGroupBox("Current tree")
@@ -371,6 +416,7 @@ class SegFixWidget(QWidget):
     def on_toggle_lasso(self, checked: bool) -> None:
         self.c.lasso.set_armed(checked)
         self.c.lasso_filter = None
+        self.c.on_lasso_section = None
         if checked:
             self._uncheck_other_modes(self.lasso_btn)
         else:
@@ -380,8 +426,23 @@ class SegFixWidget(QWidget):
     def on_toggle_tree_lasso(self, checked: bool) -> None:
         self.c.lasso.set_armed(checked)
         self.c.lasso_filter = self._filter_to_current_tree if checked else None
+        self.c.on_lasso_section = None
         if checked:
             self._uncheck_other_modes(self.tree_lasso_btn)
+        else:
+            self.move_btn.setChecked(True)
+        self._update_mode_indicator()
+
+    def on_toggle_lasso_section(self, checked: bool) -> None:
+        """Arm/disarm the shared lasso tool in "section" mode: a completed
+        drag becomes the kept-region outline (via _on_lasso_section_drawn)
+        instead of a selection. See SegFixController._on_lasso."""
+        self.c.lasso.set_armed(checked)
+        self.c.lasso_filter = None
+        self.c.on_lasso_section = self._on_lasso_section_drawn if checked else None
+        if checked:
+            self._uncheck_other_modes(self.section_draw_btn)
+            self.c.viewer.status = "Lasso section: drag to outline the kept region"
         else:
             self.move_btn.setChecked(True)
         self._update_mode_indicator()
@@ -394,7 +455,9 @@ class SegFixWidget(QWidget):
         return indices[self.c.cloud.labels[indices] == self.current]
 
     def _uncheck_other_modes(self, active_btn) -> None:
-        for btn in (self.move_btn, self.lasso_btn, self.tree_lasso_btn):
+        for btn in (
+            self.move_btn, self.lasso_btn, self.tree_lasso_btn, self.section_draw_btn,
+        ):
             if btn is active_btn:
                 continue
             btn.blockSignals(True)
@@ -405,10 +468,19 @@ class SegFixWidget(QWidget):
         """Revert to camera/movement controls (Escape)."""
         self.lasso_btn.setChecked(False)  # disarms lasso via on_toggle_lasso
         self.tree_lasso_btn.setChecked(False)  # ditto, tree-only lasso
+        self.section_draw_btn.setChecked(False)  # ditto, lasso-section drawing
         self.move_btn.setChecked(True)  # stay checked even if already in move
 
     def _update_mode_indicator(self) -> None:
-        if self.tree_lasso_btn.isChecked():
+        if self.section_draw_btn.isChecked():
+            self.mode_label.setText(
+                "LASSO SECTION — drag outlines the region to keep"
+            )
+            self.mode_label.setStyleSheet(
+                "background: #3a5a7a; color: #a8d4ff;"
+                "border-radius: 3px; padding: 3px; font-weight: bold;"
+            )
+        elif self.tree_lasso_btn.isChecked():
             self.mode_label.setText(
                 "LASSO (THIS TREE) — drag selects only the current tree's points"
             )
@@ -437,6 +509,11 @@ class SegFixWidget(QWidget):
         # carry over; turn the tool off and recompute its range for this one.
         self.cross_box.setChecked(False)
         self._reset_cross_section_range()
+        # Same for a lasso section: its mask is indices into the *previous*
+        # cloud's points array, meaningless for a new one.
+        self._lasso_section_mask = None
+        self.lasso_section_box.setChecked(False)
+        self._update_lasso_section_label()
         self._load_progress()  # done-tree set lives beside the source file
         self._on_point_size(self.size_spin.value())  # size persists across loads
         self._update_info()
@@ -685,8 +762,21 @@ class SegFixWidget(QWidget):
             self.c.cloud.labels,
             hide_unassigned=not self.show_unassigned.isChecked(),
             hidden=hidden,
-            cross_section=self._cross_section_mask(),
+            cross_section=self._combined_section_mask(),
         )
+
+    def _combined_section_mask(self) -> np.ndarray | None:
+        """AND of the cross section and lasso section, whichever are
+        currently enabled — both fold into the same "shown" mechanism as
+        one combined region, so this is the only thing _apply_visibility
+        needs to pass along."""
+        cross = self._cross_section_mask()
+        lasso = self._lasso_section_mask_active()
+        if cross is None:
+            return lasso
+        if lasso is None:
+            return cross
+        return cross & lasso
 
     def _on_show_unassigned(self, checked: bool) -> None:
         self._apply_visibility()
@@ -767,6 +857,58 @@ class SegFixWidget(QWidget):
         hi = self._slider_to_value(self.cross_max_slider.value())
         coords_axis = self.c.cloud.coords[:, axis]
         return (coords_axis >= lo) & (coords_axis <= hi)
+
+    # -- lasso section ----------------------------------------------------
+    def _on_lasso_section_drawn(self, indices: np.ndarray) -> None:
+        """Completed drag while section_draw_btn is armed: freeze it as a
+        per-point mask (not a live screen region — the camera can move
+        freely afterwards) and switch the section on to show it."""
+        n = len(self.c.cloud.coords)
+        mask = np.zeros(n, dtype=bool)
+        mask[indices] = True
+        self._lasso_section_mask = mask
+        self.lasso_section_box.blockSignals(True)
+        self.lasso_section_box.setChecked(True)
+        self.lasso_section_box.blockSignals(False)
+        self._update_lasso_section_label()
+        self._apply_visibility()
+        self.c.viewer.status = (
+            f"Lasso section drawn — kept {mask.sum():,} of {n:,} points"
+        )
+
+    def _on_lasso_section_toggled(self, checked: bool) -> None:
+        self._apply_visibility()
+        self.c.viewer.status = (
+            "Lasso section on — only the outline is shown/selectable"
+            if checked else "Lasso section off"
+        )
+
+    def _on_lasso_section_reset(self) -> None:
+        self._lasso_section_mask = None
+        self.lasso_section_box.setChecked(False)
+        self._update_lasso_section_label()
+        self._apply_visibility()
+        self.c.viewer.status = "Lasso section cleared"
+
+    def _update_lasso_section_label(self) -> None:
+        mask = self._lasso_section_mask
+        if mask is None:
+            self.lasso_section_label.setText("No outline drawn")
+        else:
+            self.lasso_section_label.setText(
+                f"{int(mask.sum()):,} / {len(mask):,} points kept"
+            )
+
+    def _lasso_section_mask_active(self) -> np.ndarray | None:
+        """The drawn mask, if the section is on and it still matches the
+        currently loaded cloud (a new cloud invalidates it — see
+        _on_cloud_changed); None otherwise, meaning no restriction."""
+        mask = self._lasso_section_mask
+        if not self.lasso_section_box.isChecked() or mask is None:
+            return None
+        if len(mask) != len(self.c.cloud.coords):
+            return None
+        return mask
 
     # -- done tracking ------------------------------------------------
     def _on_tree_item_changed(self, item) -> None:
@@ -1102,6 +1244,10 @@ def bind_shortcuts(viewer, panel: SegFixWidget) -> None:
         "x": lambda v: panel.on_noise(),
         "h": lambda v: panel.show_unassigned.toggle(),
         "c": lambda v: panel.cross_box.setChecked(not panel.cross_box.isChecked()),
+        "Shift-l": lambda v: panel.section_draw_btn.toggle(),
+        "Shift-c": lambda v: panel.lasso_section_box.setChecked(
+            not panel.lasso_section_box.isChecked()
+        ),
         "Control-z": lambda v: panel.on_undo(),
         "Control-Shift-z": lambda v: panel.on_redo(),
         "Control-s": lambda v: panel.on_save(),
