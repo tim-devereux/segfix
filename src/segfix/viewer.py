@@ -269,10 +269,11 @@ def strip_ui(viewer) -> None:
     """Hide napari chrome that has no role in the segfix workflow.
 
     Gone: the menu bar, the layer list/controls docks (layers are managed by
-    the app; point size lives in the segfix panel), the IPython console, and
-    the 2D-oriented viewer buttons (grid, roll, transpose, 2D/3D toggle —
-    leaving 3D avoids scrambling the Z-up axis order).  The reset-view button
-    and the status bar stay.
+    the app; point size lives in the segfix panel), the IPython console, the
+    2D-oriented viewer buttons (grid, roll, transpose, 2D/3D toggle — leaving
+    3D avoids scrambling the Z-up axis order), and most of the status bar
+    (see below). The reset-view button and the status bar's plain message
+    text — segfix's own feedback channel (``viewer.status = "..."``) — stay.
     """
     qt_viewer = viewer.window._qt_viewer
     for dock in (
@@ -292,6 +293,32 @@ def strip_ui(viewer) -> None:
         if btn is not None:
             btn.hide()
     viewer.window._qt_window.menuBar().setVisible(False)
+
+    # napari's own cursor-driven status update (coordinates/layer/source/
+    # plugin fields, plus the activity toggle) fires on every mouse move —
+    # disconnect the update itself rather than just hiding its widgets,
+    # since ViewerStatusBar.setStatusText always calls
+    # self._status.setText(text) with text='' on that path, blanking
+    # segfix's own status messages (e.g. "Tree 5 marked done") within a
+    # fraction of a second of the mouse being over the canvas, which it
+    # almost always is. It's also of limited use here regardless: with the
+    # Z-up axis remap in add_cloud_layer (dims.order), the three numbers it
+    # shows are silently reordered relative to the cloud's real X/Y/Z and
+    # never labelled per-axis, so "[10, 20, 30]" doesn't say which is which.
+    try:
+        viewer.cursor.events.position.disconnect(viewer.update_status_from_cursor)
+    except (TypeError, ValueError):
+        pass  # already disconnected, or a napari version wiring it differently
+    status_bar = viewer.window._qt_window.statusBar()
+    for name in (
+        "_layer_base", "_source_type", "_plugin_reader", "_coordinates", "_help",
+    ):
+        widget = getattr(status_bar, name, None)
+        if widget is not None:
+            widget.setVisible(False)
+    activity = getattr(status_bar, "_activity_item", None)
+    if activity is not None:
+        activity.setVisible(False)
 
 
 def apply_cloudcompare_controls(viewer) -> None:
