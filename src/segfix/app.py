@@ -21,7 +21,99 @@ import argparse
 import sys
 
 
+def _prefer_discrete_gpu() -> None:
+    """Best-effort: on a hybrid-graphics machine, point OpenGL/Direct3D at
+    the discrete GPU instead of whatever the platform defaults to (often
+    the weaker integrated one — see the "GPU:" status-bar label added by
+    :func:`viewer.add_gpu_status_widget` to confirm which one actually got
+    used). Detects hardware rather than hardcoding one machine's GPU model
+    name, never overrides a preference already set (env var on Linux, the
+    registry key on Windows), and never raises — worst case this is a
+    no-op and the platform default stands.
+
+    Must run before ``import napari`` (like the Wayland workaround below):
+    the Linux/WSL half relies on the underlying GL/EGL libraries not having
+    picked an adapter yet, which happens at first context creation, not at
+    process start — setting the env var any later risks losing the race
+    against whichever import gets there first. The Windows half doesn't
+    have that race (it's a registry key, not an env var) but only takes
+    effect from the *next* launch of this Python executable, not this one:
+    Windows reads a process's GPU preference at process creation, before
+    any of our code has had a chance to run.
+    """
+    try:
+        if sys.platform == "win32":
+            _prefer_discrete_gpu_windows()
+        elif sys.platform == "linux":
+            _prefer_discrete_gpu_linux()
+        # macOS: no per-process lever like the two above. Apple Silicon has
+        # a single GPU anyway; Intel-Mac dual-GPU switching is a system
+        # Energy Saver setting, not something a process can request.
+    except Exception:
+        pass  # detection failing should never block startup
+
+
+def _prefer_discrete_gpu_linux() -> None:
+    import os
+    import shutil
+    import subprocess
+
+    is_wsl = False
+    try:
+        with open("/proc/version", encoding="utf-8") as f:
+            is_wsl = "microsoft" in f.read().lower()
+    except OSError:
+        pass
+    has_nvidia = shutil.which("nvidia-smi") is not None and subprocess.run(
+        ["nvidia-smi", "-L"], capture_output=True, timeout=2
+    ).returncode == 0
+    if not has_nvidia:
+        return
+    if is_wsl:
+        # Mesa's D3D12 backend (the only GL path WSLg offers) matches this
+        # against the adapter names Windows exposes, substring not exact —
+        # so it still works if the discrete card is a different NVIDIA
+        # model than whatever machine this was tested on.
+        os.environ.setdefault("MESA_D3D12_DEFAULT_ADAPTER_NAME", "NVIDIA")
+    else:
+        # Native Linux NVIDIA Optimus/PRIME laptops: ask for the discrete
+        # GPU's GLX vendor lib instead of the integrated one.
+        os.environ.setdefault("__NV_PRIME_RENDER_OFFLOAD", "1")
+        os.environ.setdefault("__GLX_VENDOR_LIBRARY_NAME", "nvidia")
+
+
+def _prefer_discrete_gpu_windows() -> None:
+    """Set this Python executable's GPU preference to "High performance" in
+    the per-app registry key Settings > System > Display > Graphics also
+    writes to — the documented, vendor-agnostic way one process can ask
+    Windows for the discrete GPU without touching any other app's choice.
+    HKEY_CURRENT_USER, so it needs no elevation; keyed by ``sys.executable``,
+    so it only affects this specific Python (e.g. one conda env), not every
+    Python on the machine, and never touches a value already set — by the
+    user via Settings, or by this same call on a previous run.
+    """
+    import winreg
+
+    exe = sys.executable
+    key = winreg.CreateKeyEx(
+        winreg.HKEY_CURRENT_USER,
+        r"Software\Microsoft\DirectX\UserGpuPreferences",
+        0,
+        winreg.KEY_SET_VALUE | winreg.KEY_QUERY_VALUE,
+    )
+    try:
+        try:
+            winreg.QueryValueEx(key, exe)
+            return  # already has a preference (ours or the user's) — leave it
+        except FileNotFoundError:
+            pass
+        winreg.SetValueEx(key, exe, 0, winreg.REG_SZ, "GpuPreference=2;")
+    finally:
+        winreg.CloseKey(key)
+
+
 def main(argv=None) -> int:
+    _prefer_discrete_gpu()
     parser = argparse.ArgumentParser(
         prog="segfix",
         description="GUI tool to fix tree point-cloud instance segmentation.",
