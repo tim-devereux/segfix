@@ -92,12 +92,15 @@ class SceneWidget(QWidget):
         super().__init__()
         self.c = controller
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(6, 6, 6, 6)
+        layout.setSpacing(4)
 
         # "All Trees": every tree in the source file. Double-click (or Load
         # Tree) below loads one row plus its spatial neighbours into the
         # "Selected Tree + Neighbours" panel underneath for editing.
         self.trees_box = QGroupBox("All Trees")
         blay = QVBoxLayout(self.trees_box)
+        blay.setSpacing(4)
 
         self.path_label = QLabel()
         self.path_label.setWordWrap(True)

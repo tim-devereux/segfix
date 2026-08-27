@@ -167,6 +167,9 @@ def main(argv=None) -> int:
     from .widgets import SegFixController, SegFixWidget, bind_shortcuts
 
     viewer = napari.Viewer(title=f"segfix — {args.cloud}")
+    from .icons import app_icon
+
+    viewer.window._qt_window.setWindowIcon(app_icon())
     viewer.window._qt_window.showMaximized()
     # Before any loading: strip_ui/apply_cloudcompare_controls only touch
     # napari's own built-in chrome (menu bar, default docks, camera), not
@@ -220,6 +223,7 @@ def _combined_panel(*widgets):
     inner = QWidget()
     lay = QVBoxLayout(inner)
     lay.setContentsMargins(4, 4, 4, 4)
+    lay.setSpacing(4)
     for w in widgets:
         lay.addWidget(w)
     lay.addStretch()
@@ -295,6 +299,9 @@ def _run_scene(napari, args) -> int:
     from .widgets import SegFixController, SegFixWidget, bind_shortcuts
 
     viewer = napari.Viewer(title=f"segfix — {args.cloud}")
+    from .icons import app_icon
+
+    viewer.window._qt_window.setWindowIcon(app_icon())
     viewer.window._qt_window.showMaximized()
     # Before any loading: strip_ui/apply_cloudcompare_controls only touch
     # napari's own built-in chrome (menu bar, default docks, camera), not

@@ -118,6 +118,8 @@ class SegFixWidget(QWidget):
         self._bbox_busy = False
         controller.on_cloud_changed = self._on_cloud_changed
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(6, 6, 6, 6)
+        layout.setSpacing(4)
 
         self.info = QLabel()
         layout.addWidget(self.info)
@@ -132,6 +134,7 @@ class SegFixWidget(QWidget):
         # by _update_done_title() below.
         self.trees_box = QGroupBox("Selected Tree + Neighbours")
         tlay = QVBoxLayout(self.trees_box)
+        tlay.setSpacing(4)
         self.tree_table = QTableWidget(0, 4)
         self.tree_table.setHorizontalHeaderLabels(
             ["Done", "Tree ID", "Points", "Hide"]
@@ -278,6 +281,7 @@ class SegFixWidget(QWidget):
         # -- fixing the current tree ----------------------------------
         sel_box = QGroupBox("Current tree")
         sel = QVBoxLayout(sel_box)
+        sel.setSpacing(3)
         crow = QHBoxLayout()
         self.current_swatch = QLabel()
         self.current_swatch.setFixedSize(18, 18)
@@ -328,6 +332,7 @@ class SegFixWidget(QWidget):
         # -- session: history + save -----------------------------------
         session_box = QGroupBox("Session")
         session = QVBoxLayout(session_box)
+        session.setSpacing(3)
         hist = QHBoxLayout()
         self._button(hist, "Undo (Ctrl+Z)", self.on_undo, "undo")
         self._button(hist, "Redo", self.on_redo, "redo")
@@ -355,7 +360,7 @@ class SegFixWidget(QWidget):
         lighter-weight than nesting another QGroupBox."""
         label = QLabel(text)
         label.setStyleSheet(
-            "font-weight: bold; color: gray; margin-top: 4px;"
+            "font-weight: bold; color: gray; margin-top: 2px;"
         )
         return label
 

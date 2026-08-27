@@ -159,7 +159,12 @@ def choose_project() -> tuple[str, str, str] | None:
     global _app
     from napari.qt import get_qapp
 
+    from .icons import app_icon
+
     _app = get_qapp()
+    _app.setWindowIcon(app_icon())  # covers this dialog + every napari
+    # window after it that doesn't set its own — see app.py's Viewer calls
+    # for the belt-and-suspenders per-window override.
     dialog = StartupDialog()
     if dialog.exec() == QDialog.Accepted and dialog.open_path:
         return dialog.open_path, dialog.registry_path, dialog.kind

@@ -232,3 +232,56 @@ def icon(name: str) -> QIcon:
         p.end()
         _cache[name] = QIcon(pix)
     return _cache[name]
+
+
+_app_icon_cache: QIcon | None = None
+
+
+def app_icon() -> QIcon:
+    """The segfix window/taskbar icon: a canopy split into two colours —
+    one tree wrongly merged into two, or two wrongly merged into one,
+    either way the thing this tool fixes — over a short trunk. Unlike the
+    button icons above this one is filled, not just stroked, so it stays
+    legible at taskbar/dock sizes; several resolutions are baked in so a
+    window manager picks a crisp one instead of scaling a single pixmap.
+    """
+    global _app_icon_cache
+    if _app_icon_cache is not None:
+        return _app_icon_cache
+
+    result = QIcon()
+    for s in (16, 24, 32, 48, 64, 128, 256):
+        pix = QPixmap(s, s)
+        pix.fill(Qt.transparent)
+        p = QPainter(pix)
+        p.setRenderHint(QPainter.Antialiasing)
+
+        canopy_d = s * 0.74
+        cx, cy = s * 0.5, s * 0.44
+        rect = QRectF(cx - canopy_d / 2, cy - canopy_d / 2, canopy_d, canopy_d)
+        p.setPen(Qt.NoPen)
+        p.setBrush(GREEN)
+        p.drawPie(rect, 90 * 16, 180 * 16)  # left half
+        p.setBrush(AMBER)
+        p.drawPie(rect, 270 * 16, 180 * 16)  # right half
+
+        outline = QPen(QColor("#2a2a2a"))
+        outline.setWidthF(max(1.0, s * 0.035))
+        p.setPen(outline)
+        p.setBrush(Qt.NoBrush)
+        p.drawLine(QPointF(cx, cy - canopy_d / 2), QPointF(cx, cy + canopy_d / 2))
+        p.drawEllipse(rect)
+
+        trunk_w = s * 0.11
+        trunk_h = s * 0.30
+        trunk_rect = QRectF(
+            cx - trunk_w / 2, cy + canopy_d / 2 - s * 0.03, trunk_w, trunk_h
+        )
+        p.setPen(Qt.NoPen)
+        p.setBrush(QColor("#8a6a4a"))
+        p.drawRoundedRect(trunk_rect, trunk_w * 0.3, trunk_w * 0.3)
+
+        p.end()
+        result.addPixmap(pix)
+    _app_icon_cache = result
+    return result
