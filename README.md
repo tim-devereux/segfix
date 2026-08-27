@@ -2,8 +2,8 @@
 
 A GUI tool to **fix the instance segmentation of tree point clouds**. Load a
 segmented LiDAR cloud, see each tree in its own colour, and correct mistakes by
-selecting points and merging / splitting / reassigning them — then save back to
-LAS/LAZ or PLY.
+lassoing points and reassigning, splitting off, or dismissing them — then save
+back to LAS/LAZ or PLY.
 
 Built on [napari](https://napari.org) for fast 3D rendering and point selection.
 
@@ -29,14 +29,14 @@ pip install -e .
 ```bash
 segfix
 # or generate a practice cloud with built-in segmentation errors first:
-python scripts/make_sample.py sample.las
+python scripts/make_sample.py sample.ply
 ```
 
-`segfix` always opens a startup dialog: double-click a recent project to
-reopen it, or click **New Project…** to import a point cloud file. Importing
-copies the file into a new project folder (created next to wherever you
-choose) and opens that copy — edits are always saved to the copy, never the
-original source file.
+`segfix` always opens a startup dialog — there is no path argument. Double-click
+a recent project to reopen it, or click **New Project…** to import a point cloud
+file. Importing copies the file into a new project folder (created inside the
+directory you pick, named after the source file) and opens that copy — edits are
+always saved to the copy, never the original source file.
 
 Every project opened this way is recorded in `~/.config/segfix/registry.json`
 (a plain JSON file, not a database) so it shows up in the "Recent projects"
@@ -45,19 +45,34 @@ list next time.
 The per-point tree ID field is auto-detected (`treeID`, `PredInstance`,
 `label`, …); override with `--label-field NAME` if needed.
 
+**Two modes, picked from the file.** A **binary PLY** opens in the full
+two-table workflow below: the whole file is indexed but only the tree you pick
+(plus its neighbours) is ever loaded into the 3D view. LAS/LAZ and ASCII PLY
+can't be partially read, so they load whole into a single table — same keys,
+same editing, just no double-click-to-load step, and `--max-points` to subsample
+a very large one for display. `make_sample.py` writes whichever you name it:
+`sample.ply` for the documented workflow, `sample.las` for the single-table one.
+
 ## Editing workflow
 
 Navigation matches CloudCompare: clouds open **Z-up**, **left-drag rotates,
-right-drag pans, wheel zooms**. The panel top right table is basically a **review queue**: the table lists every tree with a
-done checkbox, and progress is saved to a `<cloud>.segfix.json` sidecar so a
-half-finished plot resumes where you left off. The lower table is similar, but show the currently loaded trees, which is the selected tree and its neighbors.
+right-drag pans, wheel zooms**.
 
-1. Press **Space** (or click a table row) to start reviewing. The camera
-   flies to the tree and a wireframe box marks it. To declutter a crowded
-   view, use the 👁 column in the table (or **Hide all neighbours** in the
-   Current tree panel) to hide specific or all neighbouring trees.
+Two tables stack in the right-hand panel. **All Trees** (top) lists every tree
+in the file, with a `✓` once it has been reviewed — **double-click a row** to
+load that tree plus its spatial neighbours into the 3D view. **Selected Tree +
+Neighbours** (below) is the review queue for what's currently loaded: a Done
+checkbox per tree, a 👁 column to hide one from the view, and the Prev / Done
+buttons. Both read the same `<cloud>.segfix.json` sidecar, written next to the
+working copy, so a half-finished plot resumes where you left off.
+
+1. Double-click a tree in **All Trees**. The camera flies to it and a
+   wireframe box marks it. To declutter a crowded view, use the 👁 column in
+   the lower table (or **Hide all neighbours** in the Current tree panel) to
+   hide specific or all neighbouring trees.
 2. Inspect it. If it's correct, press **Space** — the tree is marked done,
-   progress is saved, and the next unfinished tree loads. That's the loop.
+   progress is saved, and the next unfinished tree in the loaded set becomes
+   current. That's the loop.
 3. If it needs fixing, **select** points with the lasso: press **L**, drag a
    freehand loop (Shift adds), **Esc** to go back to navigating. The tree
    under review is always the implicit target — no tree IDs, no eyedropper:
@@ -66,23 +81,45 @@ half-finished plot resumes where you left off. The lower table is similar, but s
    |-----|-----------|
    | `Space` | Mark current tree done, jump to next unfinished |
    | `←` / `→` | Previous / next tree (without marking done) |
+   | `L` | Lasso select |
+   | `Ctrl+L` | Lasso, but only points already in the current tree — grabs a clean patch out of an overlapping crown |
+   | `Esc` | Back to camera / navigation |
    | `A` | Add selection to the current tree (missing branches, unassigned canopy) |
    | `N` | Split selection off as a new tree (it joins the queue unreviewed) |
    | `U` | Unassign selection — or the whole current tree if nothing is selected |
    | `X` | Mark selection as noise — or the whole current tree if nothing is selected (dismiss a bush/wall in one key) |
+   | `Delete` / `Backspace` | Same as `X` (mark noise) |
    | `H` | Show/hide the unassigned + noise points |
-   | `Delete` | Same as `X` (mark noise) |
+   | `C` | Cross section on/off |
+   | `Shift+L` | Draw a lasso-section outline |
+   | `Shift+C` | Lasso section on/off |
    | `Ctrl+Z` / `Ctrl+Shift+Z` | Undo / Redo |
    | `Ctrl+S` | Save Project |
 
-   To move stray points *to a neighbour* instead, click the neighbour's row
-   (one click — it becomes current), lasso the strays, press `A`.
-4. After the last tree, any leftover unassigned points may hide missed
-   trees: with no tree selected everything is shown — lasso and press `N`
-   to create them (they join the queue).
+   To move stray points *to a neighbour* instead, lasso them and click one of
+   the **→ id** buttons in the Current tree panel — one per tree within
+   "reach" metres of this one. Clicking that neighbour's table row to make it
+   current and pressing `A` does the same thing.
 
-5. **Save** writes back preserving the original header (CRS, scale, offset)
-   and extra attributes.
+   To **merge** an over-segmented fragment back in, lasso the whole fragment
+   and press `A`; there is no separate merge key.
+4. For a crowded canopy, two tools in the top bar cut the view down. Both fold
+   into the same visibility as the 👁 column, so hidden points are also
+   unselectable and the lasso can't grab through them:
+   - **Cross section (`C`)** — a slab along X, Y or Z, set with two sliders.
+   - **Lasso section (`Shift+C`)** — same idea, but the kept region is an
+     outline you draw (`Shift+L`, then drag). It's frozen into a point mask
+     as you release, so the camera moves freely afterwards.
+
+   Both reset when a new tree is loaded.
+5. Leftover unassigned points may hide missed trees: they're loaded alongside
+   every tree you open, so lasso one and press `N` to promote it to a tree of
+   its own (it joins the queue unreviewed).
+6. **Save** (`Ctrl+S`) writes to the project copy, never the original import,
+   and preserves the original header (CRS, scale, offset) and every extra
+   per-point attribute. For a binary PLY it patches only the points whose
+   label changed, in place, so the rest of the file is untouched byte for
+   byte.
 
 ## Layout
 
@@ -90,10 +127,12 @@ half-finished plot resumes where you left off. The lower table is similar, but s
 |------|----------------|
 | `model.py` | `PointCloud` data + undo/redo (diff-based) |
 | `io.py` | load/save PLY + LAS/LAZ, label-field detection |
-| `operations.py` | pure, UI-agnostic label edits (merge/split/reassign/…) |
+| `operations.py` | pure, UI-agnostic label edits (reassign/split/unassign/noise) |
+| `analysis.py` | which trees touch which, by sampled point distance (KD-tree) |
 | `lasso.py` | 3D screen-space lasso: camera projection + polygon test |
 | `viewer.py` | napari layer + label→colour mapping |
 | `widgets.py` | Qt dock panel wiring selection → operations |
+| `icons.py` | inline SVG icons for the panel buttons and window |
 | `treecatalog.py` | default mode: memory-mapped tree-label grouping, neighbour load + write-back |
 | `scene_ui.py` | tree table + scene controller for the default mode |
 | `registry.py` | on-disk list of recently opened files/projects |
@@ -111,3 +150,6 @@ pytest        # core model, operations, and IO round-trip (no GUI needed)
 
 - "Delete" is modelled as **mark-as-noise** (points kept, label `-1`) so files
   round-trip 1:1; an optional "drop noise on export" can be added later.
+- In an **RGB-segmented** (raycloudtools) PLY the label lives in the point's
+  colour, and noise and unassigned points are both written back as black — the
+  two are indistinguishable once such a file is reloaded.
