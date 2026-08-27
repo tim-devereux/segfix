@@ -144,18 +144,8 @@ working copy, so a half-finished plot resumes where you left off.
 pytest        # core model, operations, and IO round-trip (no GUI needed)
 ```
 
-## Notes & next steps
+## Notes
 
-- "Delete" is modelled as **mark-as-noise** (points kept, label `-1`) so files
-  round-trip 1:1; an optional "drop noise on export" can be added later.
-- LAS/LAZ support was removed rather than left half-working. Re-adding it is
-  tractable: LAS is also a fixed-record format (`offset_to_point_data` +
-  `point_data_record_length` address point *N* in O(1), and laspy exposes
-  `seek`/`read_points`), so it could drive the same memory-mapped mode. The work
-  is the write-back — it needs the label field's byte offset inside the record,
-  and the header's scale/offset applied to the coordinates. LAZ additionally
-  needs chunk-table seeking instead of a memmap. ASCII PLY cannot be supported
-  this way at all: variable-length records have no stride to index by.
 - In an **RGB-segmented** (raycloudtools) PLY the label lives in the point's
   colour, and noise and unassigned points are both written back as black — the
   two are indistinguishable once such a file is reloaded.
