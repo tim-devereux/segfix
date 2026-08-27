@@ -146,6 +146,11 @@ class SceneWidget(QWidget):
                 self.table.setItem(row, col, item)
         self.table.setSortingEnabled(True)
 
+    def refresh(self) -> None:
+        """Re-read done-state and point counts; call after external changes
+        (e.g. the shared segfix panel marking a tree done)."""
+        self._populate()
+
     def _selected_label(self) -> int | None:
         row = self.table.currentRow()
         if row < 0:

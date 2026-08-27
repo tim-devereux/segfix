@@ -228,6 +228,7 @@ def _run_scene(napari, args) -> int:
     panel = SegFixWidget(seg)
     scene_ctrl = SceneController(viewer, catalog, seg, point_size=args.point_size)
     scene_panel = SceneWidget(scene_ctrl)
+    panel.on_done_changed = scene_panel.refresh
 
     _dock_top(viewer, panel)
     _dock_right(viewer, _combined_panel(scene_panel, panel))

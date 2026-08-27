@@ -110,6 +110,10 @@ class SegFixWidget(QWidget):
         self.done_ids: set[int] = set()  # trees marked done in the table
         self.hidden_ids: set[int] = set()  # trees manually hidden via 👁
         self._table_updating = False
+        # Optional fn()->None: set by scene mode so its own tree table (which
+        # mirrors done-state from the same sidecar file) refreshes the moment
+        # a tree is marked done here, instead of waiting for the next save.
+        self.on_done_changed = None
         self._bbox_ids: set[int] = set()
         self._bbox_busy = False
         controller.on_cloud_changed = self._on_cloud_changed
@@ -735,6 +739,8 @@ class SegFixWidget(QWidget):
             self._table_updating = False
         self._update_done_title()
         path = self._save_progress()
+        if self.on_done_changed is not None:
+            self.on_done_changed()
         self.c.viewer.status = (
             f"Tree {tid} marked {'done' if done else 'not done'}"
             + (f" — saved to {os.path.basename(path)}" if path else "")
