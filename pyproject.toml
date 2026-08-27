@@ -9,13 +9,14 @@ description = "GUI tool to fix instance segmentation of tree point clouds"
 readme = "README.md"
 requires-python = ">=3.10,<3.13"
 dependencies = [
-    "napari[all]>=0.4.19",
+    # >=0.9: viewer._patch_napari_shown_in_full_3d reads _PointSliceRequest.shown,
+    # a field 0.8 does not have (and whose response kwarg 0.8 spells differently),
+    # so the app crashes on the first layer add under older napari.
+    "napari[all]>=0.9",
     "numpy>=1.24",
     "laspy[laszip]>=2.5",
     "plyfile>=1.0",
     "scipy>=1.10",
-    "scikit-learn>=1.3",
-    "pandas>=2.0",
 ]
 
 [project.optional-dependencies]
