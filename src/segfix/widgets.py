@@ -447,9 +447,11 @@ class SegFixWidget(QWidget):
             )
         except AttributeError:
             pass  # selection count then only refreshes after edits
-        # Layer-level bindings shadow napari's own Points shortcuts (delete
-        # removes points from the layer; 'a' selects all; Space pans).
+        # Layer-level bindings shadow napari's own Points shortcuts ('1',
+        # Delete and Backspace all hard-delete points from the layer; 'a'
+        # selects all; Space pans).
         layer_keys = {
+            "1": self.on_noise,
             "Delete": self.on_noise,
             "Backspace": self.on_noise,
             "a": self.on_add,
@@ -457,6 +459,27 @@ class SegFixWidget(QWidget):
         }
         for key, fn in layer_keys.items():
             self.c.layer.bind_key(key, lambda _l, _f=fn: _f(), overwrite=True)
+        # napari's Points layer also offers Add/Select/Transform modes (keys
+        # 2/3/5, or P/S) that bypass segfix's own tools entirely: Add drops
+        # arbitrary new points, Transform rotates/scales/translates the
+        # whole layer instead of the tree data, silently desyncing the view
+        # from cloud.coords. Pin the layer to pan/zoom and refuse any other
+        # mode, and replace napari's default status-bar hint (always "use
+        # <2> for add points, ... <5> for transform" — it lists every mode
+        # *other* than the current one, so this is shown constantly, not
+        # just while one of those modes is active) with segfix's real ones.
+        self._pin_layer_mode()
+        self.c.layer.events.mode.connect(self._pin_layer_mode)
+
+    def _pin_layer_mode(self, *_args) -> None:
+        """Force the Points layer back to pan/zoom if anything switches it
+        into one of napari's own edit modes, and keep its status-bar help
+        text pointed at segfix's actual controls instead of napari's
+        default (which lists those other modes). See _on_cloud_changed."""
+        layer = self.c.layer
+        if layer.mode != "pan_zoom":
+            layer.mode = "pan_zoom"
+        layer.help = "Esc = move · L = lasso · Ctrl+L = lasso this tree"
 
     def _update_info(self) -> None:
         cloud = self.c.cloud
