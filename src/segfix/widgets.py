@@ -125,12 +125,24 @@ class SegFixWidget(QWidget):
         add_gpu_status_widget(controller.viewer)
 
         # -- the queue: one row per tree, click = review that tree ------
-        self.trees_box = QGroupBox("Review queue")
+        # "Selected Tree + Neighbours": just the trees currently loaded into
+        # the 3D view (the row picked in "All Trees" above, plus whatever's
+        # spatially near it) — not the whole file, which that other table
+        # covers. Title is immediately overwritten with the live done count
+        # by _update_done_title() below.
+        self.trees_box = QGroupBox("Selected Tree + Neighbours")
         tlay = QVBoxLayout(self.trees_box)
         self.tree_table = QTableWidget(0, 4)
-        self.tree_table.setHorizontalHeaderLabels(["✓", "Tree", "Points", ""])
+        self.tree_table.setHorizontalHeaderLabels(
+            ["Done", "Tree ID", "Points", "Hide"]
+        )
+        self.tree_table.horizontalHeaderItem(0).setToolTip(
+            "Whether this tree has been marked reviewed"
+        )
         self.tree_table.horizontalHeaderItem(self.HIDE_COL).setIcon(icon("hide"))
-        self.tree_table.horizontalHeaderItem(self.HIDE_COL).setToolTip("Hide")
+        self.tree_table.horizontalHeaderItem(self.HIDE_COL).setToolTip(
+            "Hide this tree from the 3D view"
+        )
         self.tree_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.tree_table.setSelectionMode(QAbstractItemView.SingleSelection)
         self.tree_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
@@ -758,7 +770,8 @@ class SegFixWidget(QWidget):
         done = sum(
             1 for row in range(n) if self._row_id(row) in self.done_ids
         )
-        self.trees_box.setTitle(f"Trees — {done}/{n} done" if n else "Trees")
+        title = "Selected Tree + Neighbours"
+        self.trees_box.setTitle(f"{title} — {done}/{n} done" if n else title)
 
     def _progress_path(self) -> str | None:
         src = self.c.cloud.source_path or self.c.save_path

@@ -16,6 +16,7 @@ import numpy as np
 from qtpy.QtCore import QSize, Qt
 from qtpy.QtWidgets import (
     QAbstractItemView,
+    QGroupBox,
     QHBoxLayout,
     QHeaderView,
     QLabel,
@@ -92,12 +93,21 @@ class SceneWidget(QWidget):
         self.c = controller
         layout = QVBoxLayout(self)
 
-        self.path_label = QLabel(os.path.basename(controller.catalog.path))
+        # "All Trees": every tree in the source file. Double-click (or Load
+        # Tree) below loads one row plus its spatial neighbours into the
+        # "Selected Tree + Neighbours" panel underneath for editing.
+        self.trees_box = QGroupBox("All Trees")
+        blay = QVBoxLayout(self.trees_box)
+
+        self.path_label = QLabel()
         self.path_label.setWordWrap(True)
-        layout.addWidget(self.path_label)
+        blay.addWidget(self.path_label)
 
         self.table = QTableWidget(0, len(self.COLUMNS))
         self.table.setHorizontalHeaderLabels(self.COLUMNS)
+        self.table.horizontalHeaderItem(2).setToolTip(
+            "Whether this tree has been marked reviewed in the panel below"
+        )
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SingleSelection)
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
@@ -105,7 +115,7 @@ class SceneWidget(QWidget):
         self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
         self.table.setMaximumHeight(200)
         self.table.cellDoubleClicked.connect(lambda *_: self.on_load_tree())
-        layout.addWidget(self.table)
+        blay.addWidget(self.table)
 
         row = QHBoxLayout()
         load_btn = QPushButton("Load Tree")
@@ -113,7 +123,9 @@ class SceneWidget(QWidget):
         load_btn.setIconSize(QSize(18, 18))
         load_btn.clicked.connect(self.on_load_tree)
         row.addWidget(load_btn)
-        layout.addLayout(row)
+        blay.addLayout(row)
+
+        layout.addWidget(self.trees_box)
 
         controller.on_saved = self._populate
         self._populate()
@@ -135,6 +147,11 @@ class SceneWidget(QWidget):
     def _populate(self) -> None:
         done = self._read_done()
         records = sorted(self.c.catalog.records.values(), key=lambda r: r.label)
+        n_done = sum(1 for rec in records if rec.label in done)
+        self.path_label.setText(
+            f"{n_done}/{len(records)} trees done in "
+            f"{os.path.basename(self.c.catalog.path)}"
+        )
         self.table.setSortingEnabled(False)
         self.table.setRowCount(len(records))
         for row, rec in enumerate(records):
