@@ -38,40 +38,6 @@ LABEL_CANDIDATES = (
 )
 
 
-def read_xyz(path: str) -> np.ndarray:
-    """Read just the ``(N, 3)`` float32 XYZ array from a PLY/LAS/LAZ file.
-
-    Lightweight helper for the project layer (bbox/position/neighbour work)
-    that does not need labels or attributes.
-    """
-    ext = os.path.splitext(path)[1].lower()
-    if ext in (".las", ".laz"):
-        import laspy
-
-        las = laspy.read(path)
-        return np.column_stack([las.x, las.y, las.z]).astype(np.float32)
-    if ext == ".ply":
-        from plyfile import PlyData
-
-        v = PlyData.read(path)["vertex"]
-        return np.column_stack([v["x"], v["y"], v["z"]]).astype(np.float32)
-    raise ValueError(f"Unsupported format: {ext}")
-
-
-def read_full(path: str):
-    """Read a PLY vertex element as a structured array (all properties).
-
-    Used when saving removed points, which must round-trip colour/normal/time
-    columns into ``removed_points.xyz``.  Returns ``None`` for non-PLY inputs.
-    """
-    ext = os.path.splitext(path)[1].lower()
-    if ext != ".ply":
-        return None
-    from plyfile import PlyData
-
-    return PlyData.read(path)["vertex"].data
-
-
 def _parse_ply_header(fh):
     """Parse a binary/ascii PLY header from an open binary file handle.
 
@@ -334,36 +300,68 @@ def _load_las(path: str, label_field: str | None) -> PointCloud:
     )
 
 
+# numpy dtype kinds LAS "extra bytes" can store: signed/unsigned ints and
+# floats. Anything else (bool, str, object) has no LAS equivalent, so a
+# non-LAS attribute of that kind can't be carried into an extra dimension.
+_LAS_EB_KINDS = frozenset("iuf")
+_LAS_EB_NAME_LIMIT = 32  # LAS 1.4 extra-bytes descriptor: 32-byte name field
+
+
 def _save_las(cloud: PointCloud, path: str) -> None:
     import laspy
 
-    header = cloud.source_header
-    if header is None:
+    src = cloud.source_header
+    if src is None:
         header = laspy.LasHeader(point_format=3, version="1.4")
         # Auto-scale/offset so float coords survive the int storage.
-        mins = cloud.coords.min(axis=0)
-        header.offsets = mins
+        header.offsets = cloud.coords.min(axis=0)
         header.scales = np.array([0.001, 0.001, 0.001])
     else:
-        header = laspy.LasHeader(
-            point_format=header.point_format, version=header.version
-        )
-        src = cloud.source_header
-        header.offsets = src.offsets
-        header.scales = src.scales
+        # Copy the source header wholesale rather than rebuilding one from
+        # its point format and version. The CRS lives in a VLR (plus a
+        # global-encoding bit saying whether to read it as WKT or GeoTIFF
+        # keys), so a header rebuilt from those two fields alone silently
+        # drops the georeferencing — along with the file's UUID, system
+        # identifier and creation date. copy() keeps all of it; the only
+        # things that must not carry over are the previous write's point
+        # count, per-return counts and bounding box, which is exactly what
+        # partial_reset() clears and laspy recomputes on write.
+        header = src.copy()
+        header.partial_reset()
 
     las = laspy.LasData(header)
     las.x = cloud.coords[:, 0]
     las.y = cloud.coords[:, 1]
     las.z = cloud.coords[:, 2]
 
-    field = cloud.label_field
-    existing = {d.name for d in las.point_format.dimensions}
-    if field not in existing:
-        las.add_extra_dim(laspy.ExtraBytesParams(name=field, type=np.int32))
-    las[field] = cloud.labels
+    _write_las_dim(las, cloud.label_field, cloud.labels, np.dtype(np.int32))
+    # Everything else the loader carried through (intensity, classification,
+    # GPS time, RGB, any extra dims). Without this the columns exist in the
+    # point format but are written as zeros, so a round-trip through segfix
+    # would quietly blank every attribute it didn't edit.
+    for name, values in cloud.attributes.items():
+        values = np.asarray(values)
+        if len(values) == cloud.n_points:
+            _write_las_dim(las, name, values, values.dtype)
 
     las.write(path)
+
+
+def _write_las_dim(las, name: str, values, dtype: np.dtype) -> None:
+    """Write a per-point column, declaring it as an extra dimension first if
+    the point format doesn't already define one by that name.
+
+    A column that is neither already in the format nor representable as LAS
+    extra bytes (e.g. a PLY-only attribute of an unsupported dtype) is
+    skipped — the alternative is failing the whole save over one column.
+    """
+    import laspy
+
+    if name not in las.point_format.dimension_names:
+        if dtype.kind not in _LAS_EB_KINDS or len(name) > _LAS_EB_NAME_LIMIT:
+            return
+        las.add_extra_dim(laspy.ExtraBytesParams(name=name, type=dtype))
+    las[name] = values
 
 
 # -- PLY -----------------------------------------------------------------

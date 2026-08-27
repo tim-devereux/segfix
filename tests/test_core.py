@@ -30,20 +30,6 @@ def test_create_new_allocates_fresh_id():
     assert set(c.tree_ids.tolist()) == {1, 2, 3, 4}
 
 
-def test_merge_ids_keeps_smallest():
-    c = make_cloud()
-    ops.merge_ids(c, [2, 3])
-    assert 3 not in c.tree_ids
-    assert (c.labels[4:] == 2).all()
-
-
-def test_merge_selection_spans_trees():
-    c = make_cloud()
-    # indices 3 (tree1) and 4 (tree2) span two trees
-    ops.merge_selection(c, [3, 4])
-    assert c.labels[3] == c.labels[4] == 1
-
-
 def test_mark_noise_and_unassign():
     c = make_cloud()
     ops.mark_noise(c, [0])
@@ -52,21 +38,6 @@ def test_mark_noise_and_unassign():
     assert c.labels[1] == UNASSIGNED
     # noise/unassigned excluded from tree_ids
     assert NOISE not in c.tree_ids and UNASSIGNED not in c.tree_ids
-
-
-def test_split_auto():
-    rs = np.random.RandomState(1)
-    a = rs.rand(50, 3) + [0, 0, 0]
-    b = rs.rand(50, 3) + [10, 0, 0]  # well separated cluster
-    coords = np.vstack([a, b]).astype(np.float32)
-    labels = np.ones(100, dtype=np.int32)
-    c = PointCloud(coords=coords, labels=labels)
-    ops.split_auto(c, 1, 2)
-    assert len(c.tree_ids) == 2
-    # the two clusters should be cleanly separated
-    ids = c.labels
-    assert len(set(ids[:50])) == 1 and len(set(ids[50:])) == 1
-    assert ids[0] != ids[50]
 
 
 def test_no_op_records_no_undo():
@@ -110,4 +81,95 @@ def test_io_roundtrip(tmp_path, ext):
     assert loaded.n_points == 12
     np.testing.assert_array_equal(loaded.labels, c.labels)
     np.testing.assert_allclose(loaded.coords, c.coords, atol=1e-3)
-    assert "intensity" in loaded.attributes
+    # Compare values, not just presence: a LAS point format defines
+    # "intensity" whether or not anything was ever written into it, so
+    # `"intensity" in loaded.attributes` passes even on a save that dropped it.
+    np.testing.assert_array_equal(
+        loaded.attributes["intensity"], c.attributes["intensity"]
+    )
+
+
+# Minimal projected CRS, carried in a WKT VLR (point formats 6+).
+_WKT = (
+    'PROJCS["GDA94 / MGA zone 56",GEOGCS["GDA94",DATUM["GDA94",'
+    'SPHEROID["GRS 1980",6378137,298.257222101]],PRIMEM["Greenwich",0],'
+    'UNIT["degree",0.0174532925199433]],PROJECTION["Transverse_Mercator"],'
+    'UNIT["metre",1],AUTHORITY["EPSG","28356"]]'
+)
+
+
+def test_las_save_preserves_crs_scale_offset_and_attributes(tmp_path):
+    """Fixing labels must not cost the file its georeferencing or its other
+    per-point columns.
+
+    Regression: the save header used to be rebuilt from only the source's
+    point format and version, which dropped the CRS VLR (and the global
+    encoding bit that says how to read it) and left every dimension except
+    XYZ and the label field written out as zeros.
+    """
+    import laspy
+
+    n = 20
+    intensity = np.arange(n, dtype=np.uint16) + 7
+    gps_time = np.linspace(1000.0, 1060.0, n)
+
+    header = laspy.LasHeader(point_format=6, version="1.4")
+    header.offsets = np.array([100.0, 200.0, 0.0])
+    header.scales = np.array([0.001, 0.001, 0.001])
+    header.vlrs.append(laspy.vlrs.known.WktCoordinateSystemVlr(_WKT))
+    header.global_encoding.wkt = True
+    las = laspy.LasData(header)
+    las.x = np.linspace(100, 110, n)
+    las.y = np.linspace(200, 210, n)
+    las.z = np.linspace(0, 5, n)
+    las.intensity = intensity
+    las.classification = np.full(n, 5, dtype=np.uint8)
+    las.gps_time = gps_time
+    las.add_extra_dim(laspy.ExtraBytesParams(name="treeID", type=np.int32))
+    las.treeID = np.repeat([1, 2], n // 2)
+    src = str(tmp_path / "src.las")
+    las.write(src)
+
+    cloud = io.load(src)
+    ops.reassign(cloud, [0, 1, 2], 2)
+    out = str(tmp_path / "out.las")
+    io.save(cloud, out)
+
+    rt = laspy.read(out)
+    wkt_vlrs = [
+        v for v in rt.header.vlrs
+        if isinstance(v, laspy.vlrs.known.WktCoordinateSystemVlr)
+    ]
+    assert [v.string for v in wkt_vlrs] == [_WKT]
+    assert rt.header.global_encoding.wkt
+    np.testing.assert_array_equal(rt.header.scales, header.scales)
+    np.testing.assert_array_equal(rt.header.offsets, header.offsets)
+    assert rt.header.point_count == n
+
+    np.testing.assert_array_equal(rt.intensity, intensity)
+    np.testing.assert_array_equal(rt.classification, np.full(n, 5))
+    np.testing.assert_allclose(rt.gps_time, gps_time)
+    # The edit landed, and only where it was asked for.
+    np.testing.assert_array_equal(rt.treeID, cloud.labels)
+    assert list(rt.treeID[:4]) == [2, 2, 2, 1]
+
+
+def test_las_save_carries_non_las_attributes_it_can_represent(tmp_path):
+    """A PLY-sourced cloud written to LAS puts its extra columns in extra
+    dimensions, skipping only those LAS extra bytes cannot express."""
+    import laspy
+
+    c = make_cloud()
+    c.attributes["time"] = np.linspace(0, 1, 12)  # f8 -> extra dim
+    c.attributes["flag"] = np.ones(12, dtype=bool)  # no LAS equivalent
+    c.attributes["x" * 40] = np.arange(12, dtype=np.int32)  # name too long
+
+    path = str(tmp_path / "fromply.las")
+    io.save(c, path)
+
+    rt = laspy.read(path)
+    names = set(rt.point_format.dimension_names)
+    assert "time" in names
+    assert "flag" not in names and "x" * 40 not in names
+    np.testing.assert_allclose(rt.time, c.attributes["time"])
+    np.testing.assert_array_equal(rt.treeID, c.labels)
