@@ -13,21 +13,18 @@ import json
 import os
 
 import numpy as np
-from qtpy.QtCore import QSize, Qt
+from qtpy.QtCore import Qt
 from qtpy.QtWidgets import (
     QAbstractItemView,
     QGroupBox,
-    QHBoxLayout,
     QHeaderView,
     QLabel,
-    QPushButton,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
     QWidget,
 )
 
-from .icons import icon
 from .treecatalog import TreeCatalog
 from .viewer import add_cloud_layer, busy
 
@@ -95,9 +92,9 @@ class SceneWidget(QWidget):
         layout.setContentsMargins(6, 6, 6, 6)
         layout.setSpacing(4)
 
-        # "All Trees": every tree in the source file. Double-click (or Load
-        # Tree) below loads one row plus its spatial neighbours into the
-        # "Selected Tree + Neighbours" panel underneath for editing.
+        # "All Trees": every tree in the source file. Double-click a row to
+        # load it plus its spatial neighbours into the "Selected Tree +
+        # Neighbours" panel underneath for editing.
         self.trees_box = QGroupBox("All Trees")
         blay = QVBoxLayout(self.trees_box)
         blay.setSpacing(4)
@@ -119,14 +116,6 @@ class SceneWidget(QWidget):
         self.table.setMaximumHeight(200)
         self.table.cellDoubleClicked.connect(lambda *_: self.on_load_tree())
         blay.addWidget(self.table)
-
-        row = QHBoxLayout()
-        load_btn = QPushButton("Load Tree")
-        load_btn.setIcon(icon("folder"))
-        load_btn.setIconSize(QSize(18, 18))
-        load_btn.clicked.connect(self.on_load_tree)
-        row.addWidget(load_btn)
-        blay.addLayout(row)
 
         layout.addWidget(self.trees_box)
 

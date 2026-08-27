@@ -122,7 +122,6 @@ class SegFixWidget(QWidget):
         layout.setSpacing(4)
 
         self.info = QLabel()
-        layout.addWidget(self.info)
 
         add_gpu_status_widget(controller.viewer)
 
@@ -135,6 +134,7 @@ class SegFixWidget(QWidget):
         self.trees_box = QGroupBox("Selected Tree + Neighbours")
         tlay = QVBoxLayout(self.trees_box)
         tlay.setSpacing(4)
+        tlay.addWidget(self.info)  # "N points · M trees" for the loaded cloud
         self.tree_table = QTableWidget(0, 4)
         self.tree_table.setHorizontalHeaderLabels(
             ["Done", "Tree ID", "Points", "Hide"]
