@@ -1,10 +1,9 @@
-"""Left-dock UI for the default single-file mode: a table of every tree in
-the file (from :class:`~segfix.treecatalog.TreeCatalog`); double-click loads
-that tree plus its spatial neighbours into the shared segfix editing panel.
+"""The "All Trees" table for the default single-file mode: every tree in the
+file (from :class:`~segfix.treecatalog.TreeCatalog`); double-click loads that
+tree plus its spatial neighbours into the shared segfix editing panel.
 
-Modeled on :mod:`project_ui`, minus the multi-file-specific overlay concept
-(``_non_seg``/``removed_points.xyz`` are particular to the CloudCompare
-plugin's per-tree-file layout, not applicable to one big labelled cloud).
+Docked at the top of the right-hand panel, directly above that editing panel
+— see :func:`segfix.app._combined_panel`, which stacks the two into one dock.
 """
 
 from __future__ import annotations
@@ -28,7 +27,7 @@ from qtpy.QtWidgets import (
 from .treecatalog import TreeCatalog
 from .viewer import add_cloud_layer, busy
 
-DEFAULT_REACH = 1.0  # metres; matches SegFixWidget's own focus-mode default
+DEFAULT_REACH = 1.0  # metres; matches SegFixWidget's own "reach" spinner default
 
 
 class SceneController:
@@ -81,7 +80,7 @@ class SceneController:
         return msg
 
 class SceneWidget(QWidget):
-    """Tree table + load/save, docked on the left."""
+    """Tree table for the whole file; stacked above the editing panel."""
 
     COLUMNS = ["Tree ID", "Points", "Done"]
 

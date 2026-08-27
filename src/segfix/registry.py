@@ -3,9 +3,10 @@ show a startup picker instead of requiring a CLI path every time.
 
 A JSON file under the user's config directory — deliberately not a database;
 this only ever holds a short list of paths, matching the JSON-sidecar
-convention already used elsewhere in this app (``segfix_settings.json``,
-``<cloud>.segfix.json``). Point cloud data itself always stays in its native
-LAS/PLY files/directories — the registry only remembers where they are.
+convention already used elsewhere in this app (``<cloud>.segfix.json`` for
+review progress, ``segfix_project.json`` for a workspace manifest). Point
+cloud data itself always stays in its native LAS/PLY files — the registry
+only remembers where they are.
 """
 
 from __future__ import annotations
@@ -67,14 +68,6 @@ def add_entry(path: str, kind: str, registry_file: Path | None = None) -> None:
         "last_opened": time.strftime("%Y-%m-%dT%H:%M:%S"),
     })
     _write(entries[:MAX_ENTRIES], target)
-
-
-def remove_entry(path: str, registry_file: Path | None = None) -> None:
-    """Drop ``path`` from the registry (e.g. the user asked to forget it)."""
-    target = registry_file or registry_path()
-    resolved = str(Path(path).resolve())
-    entries = [e for e in load_registry(target) if e.get("path") != resolved]
-    _write(entries, target)
 
 
 def _write(entries: list[dict], path: Path) -> None:

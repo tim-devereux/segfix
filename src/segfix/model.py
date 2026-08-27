@@ -2,9 +2,10 @@
 
 A :class:`PointCloud` holds the point coordinates, the per-point instance
 label (``tree_id``), and any extra scalar attributes carried through from the
-source file.  Mutations go through small ``apply_*`` helpers that record an
-undo entry, so the GUI can offer undo/redo cheaply even on large clouds (we
-store only the indices and previous values that changed, never a full copy).
+source file.  Every mutation goes through :meth:`PointCloud.set_labels`, which
+records an undo entry, so the GUI can offer undo/redo cheaply even on large
+clouds (we store only the indices and previous values that changed, never a
+full copy).
 """
 
 from __future__ import annotations

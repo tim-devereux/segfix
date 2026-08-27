@@ -2,9 +2,9 @@
 point cloud, plus a small manifest recording where it came from. All edits
 happen on the copy — the original source file is never opened for writing.
 
-Distinct from ``--project DIR`` (a directory of many per-tree PLY files, the
-CloudCompare-plugin-style workflow — see :mod:`project`): a workspace wraps
-exactly one imported file for the default single-cloud/scene-mode workflow.
+One workspace wraps exactly one imported file: the startup dialog
+(:mod:`startup_ui`) creates it on import, and the folder — not the copy
+inside it — is what gets remembered in :mod:`registry`.
 """
 
 from __future__ import annotations
@@ -17,21 +17,10 @@ from pathlib import Path
 MANIFEST_NAME = "segfix_project.json"
 
 
-def is_workspace(path: str | Path) -> bool:
-    """Whether ``path`` is a folder created by :func:`create_workspace`."""
-    return (Path(path) / MANIFEST_NAME).exists()
-
-
 def data_file(workspace_dir: str | Path) -> Path:
     """The working copy's path inside a workspace folder."""
     manifest = json.loads((Path(workspace_dir) / MANIFEST_NAME).read_text())
     return Path(workspace_dir) / manifest["data_file"]
-
-
-def source_file(workspace_dir: str | Path) -> str:
-    """The original file this workspace's copy was imported from."""
-    manifest = json.loads((Path(workspace_dir) / MANIFEST_NAME).read_text())
-    return manifest["source"]
 
 
 def create_workspace(source: str | Path, workspace_dir: str | Path) -> Path:

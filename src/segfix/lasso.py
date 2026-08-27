@@ -236,7 +236,8 @@ class LassoTool:
         coords = self.layer.data
         canvas_xy, valid = project_to_canvas(self.viewer, self.layer, coords)
         inside = points_in_polygon(path, canvas_xy) & valid
-        # Respect isolate mode: points hidden via layer.shown are unselectable.
+        # Hidden points (a hide checkbox, "show unassigned", or either
+        # section tool — all of which set layer.shown) are unselectable.
         shown = np.asarray(self.layer.shown, dtype=bool)
         if shown.shape[0] == inside.shape[0]:
             inside &= shown

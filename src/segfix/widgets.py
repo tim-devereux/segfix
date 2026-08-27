@@ -1,10 +1,11 @@
 """Qt dock widget wiring the napari point selection to the fix operations.
 
-The workflow is a review queue.  The table lists every tree; Space marks the
-current tree done and jumps to the next unfinished one, flying the camera to
-it and focusing the view on the tree, its neighbours and the unassigned pool.
-The current tree is always the implicit target: lasso points (L) and press A
-to add them to it, N to split a new tree off, U/X to unassign or trash.
+The workflow is a review queue.  The table lists the trees currently loaded —
+the one picked in scene mode's "All Trees" plus its neighbours, or the whole
+file when it was loaded in one go.  Space marks the current tree done, flies
+the camera to the next unfinished one and jumps to it.  The current tree is
+always the implicit target: lasso points (L) and press A to add them to it,
+N to split a new tree off, U/X to unassign or trash.
 """
 
 from __future__ import annotations
@@ -245,7 +246,7 @@ class SegFixWidget(QWidget):
 
         # -- cross section: an interactive slab along one axis; while on,
         # only points inside it are shown and selectable (folded into the
-        # same layer.shown mechanism as focus mode / hidden trees) --------
+        # same layer.shown mechanism as the per-tree hide checkboxes) -----
         self.cross_box = QGroupBox("Cross section (C)")
         self.cross_box.setCheckable(True)
         self.cross_box.setChecked(False)
@@ -1138,32 +1139,32 @@ class SegFixWidget(QWidget):
         idx = self._require_selection()
         if idx is None:
             return
-        self._apply(ops.reassign(self.c.cloud, idx, tid), idx)
+        self._apply(ops.reassign(self.c.cloud, idx, tid))
 
     def on_send_to_neighbour(self, target_id: int) -> None:
         """Selection → a neighbouring tree, without switching current."""
         idx = self._require_selection()
         if idx is None:
             return
-        self._apply(ops.reassign(self.c.cloud, idx, target_id), idx)
+        self._apply(ops.reassign(self.c.cloud, idx, target_id))
 
     def on_create_new(self) -> None:
         idx = self._require_selection()
         if idx is None:
             return
-        self._apply(ops.create_new(self.c.cloud, idx), idx)
+        self._apply(ops.create_new(self.c.cloud, idx))
 
     def on_unassign(self) -> None:
         idx = self._selection_or_current_tree("unassign")
         if idx is None:
             return
-        self._apply(ops.unassign(self.c.cloud, idx), idx)
+        self._apply(ops.unassign(self.c.cloud, idx))
 
     def on_noise(self) -> None:
         idx = self._selection_or_current_tree("trash")
         if idx is None:
             return
-        self._apply(ops.mark_noise(self.c.cloud, idx), idx)
+        self._apply(ops.mark_noise(self.c.cloud, idx))
 
     def _selection_or_current_tree(self, verb: str) -> np.ndarray | None:
         """U/X act on the selection, or the whole current tree if nothing is
@@ -1178,9 +1179,9 @@ class SegFixWidget(QWidget):
             return None
         return np.flatnonzero(self.c.cloud.labels == self.current)
 
-    def _apply(self, msg: str, idx: np.ndarray | None = None) -> None:
+    def _apply(self, msg: str) -> None:
         self.c._after_edit(msg)
-        self._update_info()  # rebuilds the table; re-syncs focus/bbox/current
+        self._update_info()  # rebuilds the table; re-syncs bbox/current tree
         self._update_selection()
 
     # -- history -----------------------------------------------------

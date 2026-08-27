@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 from segfix import workspace
@@ -13,9 +15,9 @@ def test_create_workspace_copies_file_and_writes_manifest(tmp_path):
 
     assert data_path == ws_dir / "cloud.ply"
     assert data_path.read_bytes() == b"fake ply data"
-    assert workspace.is_workspace(ws_dir)
     assert workspace.data_file(ws_dir) == data_path
-    assert workspace.source_file(ws_dir) == str(source.resolve())
+    manifest = json.loads((ws_dir / workspace.MANIFEST_NAME).read_text())
+    assert manifest["source"] == str(source.resolve())
 
 
 def test_create_workspace_is_independent_copy(tmp_path):
@@ -40,9 +42,3 @@ def test_create_workspace_refuses_nonempty_existing_dir(tmp_path):
 
     with pytest.raises(FileExistsError):
         workspace.create_workspace(source, ws_dir)
-
-
-def test_is_workspace_false_for_plain_directory(tmp_path):
-    plain = tmp_path / "just_a_dir"
-    plain.mkdir()
-    assert not workspace.is_workspace(plain)

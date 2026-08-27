@@ -135,8 +135,8 @@ class TreeCatalog:
 
         Delegates to :func:`analysis.neighbours_by_points` against the
         resident (not memory-mapped) coords/labels — same algorithm the
-        review panel's own focus-mode already uses, just pointed at the
-        whole file's data instead of whatever's currently loaded.
+        review panel's own neighbour picker uses, just pointed at the whole
+        file's data instead of whatever's currently loaded.
         """
         from . import analysis
 

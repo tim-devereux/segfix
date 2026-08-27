@@ -60,17 +60,6 @@ def test_load_registry_prunes_missing_paths(tmp_path):
     assert len(on_disk) == 1
 
 
-def test_remove_entry(tmp_path):
-    target = tmp_path / "registry.json"
-    a = tmp_path / "a.ply"
-    a.touch()
-    registry.add_entry(str(a), "file", registry_file=target)
-    assert registry.load_registry(target)
-
-    registry.remove_entry(str(a), registry_file=target)
-    assert registry.load_registry(target) == []
-
-
 def test_max_entries_trims_oldest(tmp_path, monkeypatch):
     target = tmp_path / "registry.json"
     monkeypatch.setattr(registry, "MAX_ENTRIES", 3)

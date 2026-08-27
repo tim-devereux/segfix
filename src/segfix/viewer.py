@@ -26,7 +26,7 @@ def busy(viewer, message: str) -> None:
     QApplication.processEvents()
 
 
-def gpu_renderer_info(viewer) -> str | None:
+def gpu_renderer_info() -> str | None:
     """Best-effort OpenGL renderer string for the canvas's active GPU
     context (e.g. "NVIDIA RTX A1000 Laptop GPU" vs. a software/Mesa
     renderer) — lets a user confirm whether a GPU-offload env var actually
@@ -58,7 +58,7 @@ def add_gpu_status_widget(viewer) -> None:
     """
     from qtpy.QtWidgets import QLabel
 
-    gpu = gpu_renderer_info(viewer)
+    gpu = gpu_renderer_info()
     label = QLabel(f"GPU: {gpu}" if gpu else "GPU: unknown")
     label.setStyleSheet("color: gray; padding: 0 6px;")
     label.setToolTip(
@@ -140,22 +140,17 @@ def colors_for_labels(labels: np.ndarray, label_colors=None) -> np.ndarray:
     return colors
 
 
-def visibility_mask(labels: np.ndarray, isolated=None, hide_unassigned=False,
-                    hidden=None, focus=None, cross_section=None):
-    """Per-point ``shown`` mask combining isolate mode, hide-unassigned,
-    manually hidden points (``hidden`` is a per-point boolean mask), focus
-    mode (``focus`` tree IDs stay visible along with unassigned points;
-    other trees and noise are hidden), and the cross-section tool
-    (``cross_section`` is a per-point boolean mask of points inside the
-    current slab — points outside it are hidden and thus unselectable, same
-    as any other hidden point)."""
+def visibility_mask(labels: np.ndarray, hide_unassigned=False,
+                    hidden=None, cross_section=None):
+    """Per-point ``shown`` mask, ANDing together every visibility filter.
+
+    ``hide_unassigned`` drops the unassigned and noise points; ``hidden`` is
+    a per-point boolean mask of individually hidden points (the table's hide
+    checkboxes); ``cross_section`` is a per-point boolean mask of the region
+    the section tools kept. Points left unshown are also unselectable — the
+    lasso intersects its result with this same mask.
+    """
     shown = np.ones(len(labels), dtype=bool)
-    if isolated is not None:
-        ids = np.fromiter(isolated, dtype=np.int64)
-        shown &= np.isin(labels, ids)
-    if focus is not None:
-        ids = np.fromiter(focus, dtype=np.int64)
-        shown &= np.isin(labels, ids) | (labels == UNASSIGNED)
     if hide_unassigned:
         shown &= (labels != UNASSIGNED) & (labels != NOISE)
     if hidden is not None and len(hidden) == len(labels):
@@ -176,9 +171,9 @@ def _patch_napari_shown_in_full_3d() -> None:
     ``_PointSliceRequest.__call__`` takes a fast path when
     ``slice_input.not_displayed`` is empty — "if we want to display
     everything, use all indices" — and returns every point index without
-    ever consulting ``self.shown``. That silently no-ops every
-    visibility toggle in the app (focus mode, "show unassigned", and the
-    per-tree hide checkbox) since they all work by setting ``layer.shown``.
+    ever consulting ``self.shown``. That silently no-ops every visibility
+    control in the app ("show unassigned", the per-tree hide checkbox, and
+    both section tools) since they all work by setting ``layer.shown``.
     Patched to still filter by ``shown`` on that path.
     """
     global _shown_patch_applied

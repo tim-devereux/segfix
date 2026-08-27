@@ -1,9 +1,10 @@
-"""Startup picker: choose a recent project or import a new file/directory.
+"""Startup picker: reopen a recent project, or import a point cloud file as
+a new one.
 
-Shown when segfix is launched with no path argument, so there's a way to
-pick what to open without needing to know the CLI flags up front. Providing
-a path on the command line (``segfix cloud.ply``) skips this entirely —
-it's purely a convenience for interactive launches.
+``segfix`` takes no path argument, so this dialog is how every session picks
+what to open — there is no way to skip it. Importing copies the chosen file
+into a fresh workspace folder (:mod:`workspace`) and opens that copy, so the
+source file is never the thing being edited.
 """
 
 from __future__ import annotations
