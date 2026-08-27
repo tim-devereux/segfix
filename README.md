@@ -9,6 +9,9 @@ Built on [napari](https://napari.org) for fast 3D rendering and point selection.
 
 <img width="1920" height="1134" alt="image" src="https://github.com/user-attachments/assets/a3386292-249b-4866-93c9-8ca07f1dccd1" />
 
+## Contributing
+
+Feedback, issues, and PRs all welcome. For issues please use [GitHub issues](https://github.com/tim-devereux/segfix/issues) (not a personal message) so the community can benefit.
 ## Install
 
 Requires Python 3.10–3.12 (napari/Qt do not yet ship wheels for 3.13+).
