@@ -6,7 +6,7 @@ under-segmented pair (two trees sharing one ID) — plus the two non-tree
 labels real scans always carry: a scatter of unassigned ground/understory
 points, and a handful of noise points floating with nothing near them.
 
-Usage:  python scripts/make_sample.py sample.las
+Usage:  python scripts/make_sample.py sample.ply
 """
 
 import sys
@@ -92,4 +92,4 @@ def main(out):
 
 
 if __name__ == "__main__":
-    main(sys.argv[1] if len(sys.argv) > 1 else "sample.las")
+    main(sys.argv[1] if len(sys.argv) > 1 else "sample.ply")

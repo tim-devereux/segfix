@@ -53,9 +53,6 @@ class PointCloud:
     attributes: dict[str, np.ndarray] = field(default_factory=dict)
     source_path: str | None = None
     label_field: str = "treeID"
-    # Opaque source metadata (e.g. a laspy LasHeader) kept for round-tripping
-    # CRS / scale / offset on save.  Not interpreted by the model.
-    source_header: object | None = None
     # How the cloud was loaded, so save() can round-trip the original format.
     # "auto" uses the path extension; "raycloud_rgb" means the segmentation is
     # encoded as per-point RGB (see io.load_rgb_segmented).

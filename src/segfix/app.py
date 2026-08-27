@@ -5,14 +5,13 @@ import a new file — there's no way to pass a cloud path directly on the
 command line, so every session goes through the registry. See
 :mod:`registry`/:mod:`startup_ui`.
 
-Once a path is chosen:
-- A binary PLY (RGB-segmented or label-field, the common case) gets a tree
-  table; double-click a row to load that tree plus its spatial neighbours,
-  instead of loading the whole cloud at once. See
-  :mod:`treecatalog`/:mod:`scene_ui`.
-- A non-binary/ASCII PLY or LAS/LAZ loads and edits the whole cloud at once;
-  memory-mapped partial loading isn't available for these, so
-  ``--max-points`` is the escape hatch for very large ones.
+Once a path is chosen it opens in the one editing mode: a table of every tree
+in the file, where double-clicking a row loads that tree plus its spatial
+neighbours rather than the whole cloud. See :mod:`treecatalog`/:mod:`scene_ui`.
+
+That mode needs to seek to an arbitrary point without parsing everything
+before it, so binary PLY — fixed-size vertex records at a known offset — is
+the only format accepted; :func:`segfix.io.load` rejects the rest.
 """
 
 from __future__ import annotations
@@ -127,15 +126,6 @@ def main(argv=None) -> int:
         "--point-size", type=float, default=0.01,
         help="Render size of points in metres (default: 0.01)",
     )
-    parser.add_argument(
-        "--max-points",
-        type=int,
-        default=None,
-        help="Subsample very large clouds to at most this many points for "
-        "display. Only applies to LAS/LAZ or ASCII PLY input — a binary PLY "
-        "loads a tree table instead and never needs subsampling. Saving "
-        "writes only loaded points.",
-    )
     args = parser.parse_args(argv)
 
     # Must import napari before any QApplication exists (including the one
@@ -156,59 +146,7 @@ def main(argv=None) -> int:
     args.cloud = open_path
     registry.add_entry(registry_path, kind=kind)
 
-    if _is_binary_ply(args.cloud):
-        return _run_scene(napari, args)
-
-    import numpy as np
-
-    from . import io
-    from .model import PointCloud
-    from .viewer import add_cloud_layer, apply_cloudcompare_controls, busy, strip_ui
-    from .widgets import SegFixController, SegFixWidget, bind_shortcuts
-
-    viewer = napari.Viewer(title=f"segfix — {args.cloud}")
-    from .icons import app_icon
-
-    viewer.window._qt_window.setWindowIcon(app_icon())
-    viewer.window._qt_window.showMaximized()
-    # Before any loading: strip_ui/apply_cloudcompare_controls only touch
-    # napari's own built-in chrome (menu bar, default docks, camera), not
-    # anything of ours, so they're safe this early — and doing them now
-    # means the "busy" status repaint below (and the load itself) never
-    # flashes the default, unstripped napari GUI first.
-    apply_cloudcompare_controls(viewer)
-    strip_ui(viewer)
-    # An empty Points layer, added before the (potentially slow) load: with
-    # zero layers, napari shows its own "drag a file here" welcome screen
-    # over the canvas — adding this one dismisses that, then gets swapped
-    # for the real cloud once loading finishes.
-    empty = PointCloud(
-        coords=np.empty((0, 3), np.float32), labels=np.empty(0, np.int32)
-    )
-    layer = add_cloud_layer(viewer, empty, point_size=args.point_size)
-    busy(viewer, f"Loading {args.cloud}…")
-
-    cloud = io.load(
-        args.cloud, label_field=args.label_field, max_points=args.max_points
-    )
-    viewer.layers.remove(layer)
-    layer = add_cloud_layer(viewer, cloud, point_size=args.point_size)
-
-    controller = SegFixController(viewer, cloud, layer)
-    panel = SegFixWidget(controller)
-    _dock_top(viewer, panel)
-    _dock_right(viewer, panel)
-    panel.size_spin.setValue(args.point_size)
-    bind_shortcuts(viewer, panel)
-
-    viewer.status = (
-        f"Loaded {cloud.n_points:,} points · {len(cloud.tree_ids)} trees. "
-        "Space = review first tree, L = lasso, A/N/U/X to fix, "
-        "Space again when done."
-    )
-
-    napari.run()
-    return 0
+    return _run_scene(napari, args)
 
 
 def _combined_panel(*widgets):
@@ -269,22 +207,6 @@ def _dock_top(viewer, panel) -> None:
     top of the window — it's about the canvas/viewport, not the tree-review
     workflow the main side panel is organised around."""
     viewer.window.add_dock_widget(panel.top_bar, name="view", area="top")
-
-
-def _is_binary_ply(path: str) -> bool:
-    """Whether ``path`` looks like a binary PLY — the only format the
-    default tree-table+neighbour-loading mode can memory-map partial reads
-    from."""
-    if not path.lower().endswith(".ply"):
-        return False
-    from . import io
-
-    try:
-        with open(path, "rb") as fh:
-            fmt, _props, _count, _offset = io._parse_ply_header(fh)
-    except OSError:
-        return False
-    return "binary" in fmt
 
 
 def _run_scene(napari, args) -> int:

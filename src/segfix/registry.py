@@ -5,7 +5,7 @@ A JSON file under the user's config directory — deliberately not a database;
 this only ever holds a short list of paths, matching the JSON-sidecar
 convention already used elsewhere in this app (``<cloud>.segfix.json`` for
 review progress, ``segfix_project.json`` for a workspace manifest). Point
-cloud data itself always stays in its native LAS/PLY files — the registry
+cloud data itself always stays in its native PLY files — the registry
 only remembers where they are.
 """
 

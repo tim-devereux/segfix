@@ -87,7 +87,7 @@ class StartupDialog(QDialog):
     def _new_project(self) -> None:
         source, _ = QFileDialog.getOpenFileName(
             self, "Import point cloud", str(Path.home()),
-            "Point clouds (*.las *.laz *.ply)",
+            "Binary PLY point clouds (*.ply)",
         )
         if not source:
             return

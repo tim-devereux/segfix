@@ -71,105 +71,48 @@ def test_points_in_polygon_degenerate():
     assert not points_in_polygon(poly, np.array([[0.5, 0.5]])).any()
 
 
-@pytest.mark.parametrize("ext", [".ply", ".las"])
-def test_io_roundtrip(tmp_path, ext):
+def test_ply_roundtrip_keeps_labels_coords_and_attributes(tmp_path):
     c = make_cloud()
     c.attributes["intensity"] = np.arange(12, dtype=np.uint16)
-    path = str(tmp_path / f"cloud{ext}")
+    path = str(tmp_path / "cloud.ply")
     io.save(c, path)
     loaded = io.load(path)
     assert loaded.n_points == 12
     np.testing.assert_array_equal(loaded.labels, c.labels)
     np.testing.assert_allclose(loaded.coords, c.coords, atol=1e-3)
-    # Compare values, not just presence: a LAS point format defines
-    # "intensity" whether or not anything was ever written into it, so
-    # `"intensity" in loaded.attributes` passes even on a save that dropped it.
     np.testing.assert_array_equal(
         loaded.attributes["intensity"], c.attributes["intensity"]
     )
 
 
-# Minimal projected CRS, carried in a WKT VLR (point formats 6+).
-_WKT = (
-    'PROJCS["GDA94 / MGA zone 56",GEOGCS["GDA94",DATUM["GDA94",'
-    'SPHEROID["GRS 1980",6378137,298.257222101]],PRIMEM["Greenwich",0],'
-    'UNIT["degree",0.0174532925199433]],PROJECTION["Transverse_Mercator"],'
-    'UNIT["metre",1],AUTHORITY["EPSG","28356"]]'
-)
+@pytest.mark.parametrize("name,make", [
+    ("cloud.las", lambda p: p.write_bytes(b"LASF")),
+    ("cloud.laz", lambda p: p.write_bytes(b"LASF")),
+    ("cloud.txt", lambda p: p.write_text("1 2 3")),
+])
+def test_load_rejects_non_ply(tmp_path, name, make):
+    path = tmp_path / name
+    make(path)
+    with pytest.raises(ValueError, match="binary PLY only"):
+        io.load(str(path))
 
 
-def test_las_save_preserves_crs_scale_offset_and_attributes(tmp_path):
-    """Fixing labels must not cost the file its georeferencing or its other
-    per-point columns.
+def test_load_rejects_ascii_ply(tmp_path):
+    """ASCII PLY has variable-length records, so treecatalog cannot seek to a
+    tree without parsing the whole file — it is refused rather than silently
+    loading down a path that no longer exists."""
+    from plyfile import PlyData, PlyElement
 
-    Regression: the save header used to be rebuilt from only the source's
-    point format and version, which dropped the CRS VLR (and the global
-    encoding bit that says how to read it) and left every dimension except
-    XYZ and the label field written out as zeros.
-    """
-    import laspy
+    v = np.empty(3, dtype=[("x", "f4"), ("y", "f4"), ("z", "f4"), ("treeID", "i4")])
+    v["x"] = v["y"] = v["z"] = 0.0
+    v["treeID"] = [1, 2, 3]
+    path = tmp_path / "ascii.ply"
+    PlyData([PlyElement.describe(v, "vertex")], text=True).write(str(path))
 
-    n = 20
-    intensity = np.arange(n, dtype=np.uint16) + 7
-    gps_time = np.linspace(1000.0, 1060.0, n)
-
-    header = laspy.LasHeader(point_format=6, version="1.4")
-    header.offsets = np.array([100.0, 200.0, 0.0])
-    header.scales = np.array([0.001, 0.001, 0.001])
-    header.vlrs.append(laspy.vlrs.known.WktCoordinateSystemVlr(_WKT))
-    header.global_encoding.wkt = True
-    las = laspy.LasData(header)
-    las.x = np.linspace(100, 110, n)
-    las.y = np.linspace(200, 210, n)
-    las.z = np.linspace(0, 5, n)
-    las.intensity = intensity
-    las.classification = np.full(n, 5, dtype=np.uint8)
-    las.gps_time = gps_time
-    las.add_extra_dim(laspy.ExtraBytesParams(name="treeID", type=np.int32))
-    las.treeID = np.repeat([1, 2], n // 2)
-    src = str(tmp_path / "src.las")
-    las.write(src)
-
-    cloud = io.load(src)
-    ops.reassign(cloud, [0, 1, 2], 2)
-    out = str(tmp_path / "out.las")
-    io.save(cloud, out)
-
-    rt = laspy.read(out)
-    wkt_vlrs = [
-        v for v in rt.header.vlrs
-        if isinstance(v, laspy.vlrs.known.WktCoordinateSystemVlr)
-    ]
-    assert [v.string for v in wkt_vlrs] == [_WKT]
-    assert rt.header.global_encoding.wkt
-    np.testing.assert_array_equal(rt.header.scales, header.scales)
-    np.testing.assert_array_equal(rt.header.offsets, header.offsets)
-    assert rt.header.point_count == n
-
-    np.testing.assert_array_equal(rt.intensity, intensity)
-    np.testing.assert_array_equal(rt.classification, np.full(n, 5))
-    np.testing.assert_allclose(rt.gps_time, gps_time)
-    # The edit landed, and only where it was asked for.
-    np.testing.assert_array_equal(rt.treeID, cloud.labels)
-    assert list(rt.treeID[:4]) == [2, 2, 2, 1]
+    with pytest.raises(ValueError, match="ASCII PLY"):
+        io.load(str(path))
 
 
-def test_las_save_carries_non_las_attributes_it_can_represent(tmp_path):
-    """A PLY-sourced cloud written to LAS puts its extra columns in extra
-    dimensions, skipping only those LAS extra bytes cannot express."""
-    import laspy
-
-    c = make_cloud()
-    c.attributes["time"] = np.linspace(0, 1, 12)  # f8 -> extra dim
-    c.attributes["flag"] = np.ones(12, dtype=bool)  # no LAS equivalent
-    c.attributes["x" * 40] = np.arange(12, dtype=np.int32)  # name too long
-
-    path = str(tmp_path / "fromply.las")
-    io.save(c, path)
-
-    rt = laspy.read(path)
-    names = set(rt.point_format.dimension_names)
-    assert "time" in names
-    assert "flag" not in names and "x" * 40 not in names
-    np.testing.assert_allclose(rt.time, c.attributes["time"])
-    np.testing.assert_array_equal(rt.treeID, c.labels)
+def test_save_rejects_non_ply(tmp_path):
+    with pytest.raises(ValueError, match="binary PLY only"):
+        io.save(make_cloud(), str(tmp_path / "out.las"))

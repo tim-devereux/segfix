@@ -1,9 +1,13 @@
-"""Load and save segmented point clouds in PLY and LAS/LAZ.
+"""Load and save segmented point clouds as binary PLY.
 
-The instance label lives in a per-point field whose name varies between
-pipelines (``treeID``, ``PredInstance``, ``label`` ...), so we auto-detect it
-from a list of common candidates and remember which one we used in order to
-round-trip the file on save.
+Binary PLY is the only format segfix reads or writes: its fixed-size vertex
+records are what let :mod:`treecatalog` memory-map a plot and pull back one
+tree at a time, which the whole review workflow is built on. ASCII PLY has no
+such stride, and LAS/LAZ would need a separate reader and write-back path.
+
+The instance label lives either in a per-point field whose name varies between
+pipelines (``treeID``, ``PredInstance``, ``label`` ...), auto-detected from a
+list of common candidates, or in the point's RGB colour (raycloudtools).
 """
 
 from __future__ import annotations
@@ -82,22 +86,26 @@ def _is_rgb_segmented(props, label_field) -> bool:
     return {"red", "green", "blue"}.issubset(lowered)
 
 
-def load(path: str, label_field: str | None = None, max_points=None) -> PointCloud:
+def load(path: str, label_field: str | None = None) -> PointCloud:
+    """Read a binary PLY. Raises ``ValueError`` for anything else."""
     ext = os.path.splitext(path)[1].lower()
-    if ext in (".las", ".laz"):
-        return _load_las(path, label_field)
-    if ext == ".ply":
-        # Peek at the header: if the segmentation is encoded as RGB (no label
-        # field but colour present), take the fast RGB-segmented path.
-        with open(path, "rb") as fh:
-            fmt, props, _count, _off = _parse_ply_header(fh)
-        if "binary" in fmt and _is_rgb_segmented(props, label_field):
-            return load_rgb_segmented(path, max_points=max_points)
-        return _load_ply(path, label_field)
-    raise ValueError(f"Unsupported input format: {ext}")
+    if ext != ".ply":
+        raise ValueError(f"segfix reads binary PLY only, not {ext or path!r}")
+    # Peek at the header: if the segmentation is encoded as RGB (no label
+    # field but colour present), take the fast RGB-segmented path.
+    with open(path, "rb") as fh:
+        fmt, props, _count, _off = _parse_ply_header(fh)
+    if "binary" not in fmt:
+        raise ValueError(
+            f"{path} is an ASCII PLY; segfix reads binary PLY only "
+            "(its fixed-size records are what make tree-at-a-time loading work)"
+        )
+    if _is_rgb_segmented(props, label_field):
+        return load_rgb_segmented(path)
+    return _load_ply(path, label_field)
 
 
-def load_rgb_segmented(path: str, max_points=None) -> PointCloud:
+def load_rgb_segmented(path: str) -> PointCloud:
     """Load a binary PLY whose tree segmentation is encoded as per-point RGB.
 
     Each distinct colour becomes a tree label; pure black ``(0, 0, 0)`` is
@@ -114,10 +122,6 @@ def load_rgb_segmented(path: str, max_points=None) -> PointCloud:
         for name, ptype in props
     ])
     data = np.memmap(path, dtype=dtype, mode="r", offset=offset, shape=(count,))
-
-    if max_points is not None and count > max_points:
-        step = int(np.ceil(count / max_points))
-        data = data[::step]
 
     names = {n.lower(): n for n in data.dtype.names}
     coords = np.column_stack([
@@ -159,15 +163,12 @@ def load_rgb_segmented(path: str, max_points=None) -> PointCloud:
 
 def save(cloud: PointCloud, path: str) -> None:
     ext = os.path.splitext(path)[1].lower()
-    if ext in (".las", ".laz"):
-        _save_las(cloud, path)
-    elif ext == ".ply":
-        if cloud.source_format == "raycloud_rgb":
-            save_rgb_segmented(cloud, path)
-        else:
-            _save_ply(cloud, path)
+    if ext != ".ply":
+        raise ValueError(f"segfix writes binary PLY only, not {ext or path!r}")
+    if cloud.source_format == "raycloud_rgb":
+        save_rgb_segmented(cloud, path)
     else:
-        raise ValueError(f"Unsupported output format: {ext}")
+        _save_ply(cloud, path)
 
 
 def color_for_label(label: int, label_colors=None) -> tuple[int, int, int]:
@@ -266,102 +267,6 @@ def _pick_label_field(names, requested: str | None) -> str | None:
         if cand.lower() in lowered:
             return lowered[cand.lower()]
     return None
-
-
-# -- LAS / LAZ -----------------------------------------------------------
-def _load_las(path: str, label_field: str | None) -> PointCloud:
-    import laspy
-
-    las = laspy.read(path)
-    coords = np.column_stack([las.x, las.y, las.z]).astype(np.float32)
-
-    dim_names = [d.name for d in las.point_format.dimensions]
-    field = _pick_label_field(dim_names, label_field)
-    if field is not None:
-        labels = np.asarray(las[field]).astype(np.int32)
-    else:
-        labels = np.zeros(len(coords), dtype=np.int32)
-        field = "treeID"
-
-    # Carry through other scalar dims (intensity etc.) for display/round-trip.
-    skip = {"X", "Y", "Z", "x", "y", "z", field}
-    attributes = {
-        name: np.asarray(las[name])
-        for name in dim_names
-        if name not in skip
-    }
-    return PointCloud(
-        coords=coords,
-        labels=labels,
-        attributes=attributes,
-        source_path=path,
-        label_field=field,
-        source_header=las.header,
-    )
-
-
-# numpy dtype kinds LAS "extra bytes" can store: signed/unsigned ints and
-# floats. Anything else (bool, str, object) has no LAS equivalent, so a
-# non-LAS attribute of that kind can't be carried into an extra dimension.
-_LAS_EB_KINDS = frozenset("iuf")
-_LAS_EB_NAME_LIMIT = 32  # LAS 1.4 extra-bytes descriptor: 32-byte name field
-
-
-def _save_las(cloud: PointCloud, path: str) -> None:
-    import laspy
-
-    src = cloud.source_header
-    if src is None:
-        header = laspy.LasHeader(point_format=3, version="1.4")
-        # Auto-scale/offset so float coords survive the int storage.
-        header.offsets = cloud.coords.min(axis=0)
-        header.scales = np.array([0.001, 0.001, 0.001])
-    else:
-        # Copy the source header wholesale rather than rebuilding one from
-        # its point format and version. The CRS lives in a VLR (plus a
-        # global-encoding bit saying whether to read it as WKT or GeoTIFF
-        # keys), so a header rebuilt from those two fields alone silently
-        # drops the georeferencing — along with the file's UUID, system
-        # identifier and creation date. copy() keeps all of it; the only
-        # things that must not carry over are the previous write's point
-        # count, per-return counts and bounding box, which is exactly what
-        # partial_reset() clears and laspy recomputes on write.
-        header = src.copy()
-        header.partial_reset()
-
-    las = laspy.LasData(header)
-    las.x = cloud.coords[:, 0]
-    las.y = cloud.coords[:, 1]
-    las.z = cloud.coords[:, 2]
-
-    _write_las_dim(las, cloud.label_field, cloud.labels, np.dtype(np.int32))
-    # Everything else the loader carried through (intensity, classification,
-    # GPS time, RGB, any extra dims). Without this the columns exist in the
-    # point format but are written as zeros, so a round-trip through segfix
-    # would quietly blank every attribute it didn't edit.
-    for name, values in cloud.attributes.items():
-        values = np.asarray(values)
-        if len(values) == cloud.n_points:
-            _write_las_dim(las, name, values, values.dtype)
-
-    las.write(path)
-
-
-def _write_las_dim(las, name: str, values, dtype: np.dtype) -> None:
-    """Write a per-point column, declaring it as an extra dimension first if
-    the point format doesn't already define one by that name.
-
-    A column that is neither already in the format nor representable as LAS
-    extra bytes (e.g. a PLY-only attribute of an unsupported dtype) is
-    skipped — the alternative is failing the whole save over one column.
-    """
-    import laspy
-
-    if name not in las.point_format.dimension_names:
-        if dtype.kind not in _LAS_EB_KINDS or len(name) > _LAS_EB_NAME_LIMIT:
-            return
-        las.add_extra_dim(laspy.ExtraBytesParams(name=name, type=dtype))
-    las[name] = values
 
 
 # -- PLY -----------------------------------------------------------------

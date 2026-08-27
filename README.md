@@ -3,7 +3,7 @@
 A GUI tool to **fix the instance segmentation of tree point clouds**. Load a
 segmented LiDAR cloud, see each tree in its own colour, and correct mistakes by
 lassoing points and reassigning, splitting off, or dismissing them — then save
-back to LAS/LAZ or PLY.
+back to the PLY you started from.
 
 Built on [napari](https://napari.org) for fast 3D rendering and point selection.
 
@@ -45,13 +45,13 @@ list next time.
 The per-point tree ID field is auto-detected (`treeID`, `PredInstance`,
 `label`, …); override with `--label-field NAME` if needed.
 
-**Two modes, picked from the file.** A **binary PLY** opens in the full
-two-table workflow below: the whole file is indexed but only the tree you pick
-(plus its neighbours) is ever loaded into the 3D view. LAS/LAZ and ASCII PLY
-can't be partially read, so they load whole into a single table — same keys,
-same editing, just no double-click-to-load step, and `--max-points` to subsample
-a very large one for display. `make_sample.py` writes whichever you name it:
-`sample.ply` for the documented workflow, `sample.las` for the single-table one.
+**Binary PLY only** — RGB-segmented (raycloudtools) or with a label field.
+That is not arbitrary: binary PLY stores its vertices as fixed-size records at
+a known offset, which is what lets `treecatalog.py` memory-map a whole plot and
+read back just the points of one tree. ASCII PLY has variable-length records
+with no stride to index by, so the same trick is impossible; LAS/LAZ could
+support it in principle but would need their own reader and in-place write-back.
+Both are refused at load with an explanation rather than half-working.
 
 ## Editing workflow
 
@@ -115,18 +115,16 @@ working copy, so a half-finished plot resumes where you left off.
 5. Leftover unassigned points may hide missed trees: they're loaded alongside
    every tree you open, so lasso one and press `N` to promote it to a tree of
    its own (it joins the queue unreviewed).
-6. **Save** (`Ctrl+S`) writes to the project copy, never the original import,
-   and preserves the original header (CRS, scale, offset) and every extra
-   per-point attribute. For a binary PLY it patches only the points whose
-   label changed, in place, so the rest of the file is untouched byte for
-   byte.
+6. **Save** (`Ctrl+S`) writes to the project copy, never the original import.
+   It patches only the points whose label changed, in place, so the header and
+   every other column are untouched byte for byte.
 
 ## Layout
 
 | File | Responsibility |
 |------|----------------|
 | `model.py` | `PointCloud` data + undo/redo (diff-based) |
-| `io.py` | load/save PLY + LAS/LAZ, label-field detection |
+| `io.py` | load/save binary PLY, label-field and RGB-segmentation detection |
 | `operations.py` | pure, UI-agnostic label edits (reassign/split/unassign/noise) |
 | `analysis.py` | which trees touch which, by sampled point distance (KD-tree) |
 | `lasso.py` | 3D screen-space lasso: camera projection + polygon test |
@@ -150,6 +148,14 @@ pytest        # core model, operations, and IO round-trip (no GUI needed)
 
 - "Delete" is modelled as **mark-as-noise** (points kept, label `-1`) so files
   round-trip 1:1; an optional "drop noise on export" can be added later.
+- LAS/LAZ support was removed rather than left half-working. Re-adding it is
+  tractable: LAS is also a fixed-record format (`offset_to_point_data` +
+  `point_data_record_length` address point *N* in O(1), and laspy exposes
+  `seek`/`read_points`), so it could drive the same memory-mapped mode. The work
+  is the write-back — it needs the label field's byte offset inside the record,
+  and the header's scale/offset applied to the coordinates. LAZ additionally
+  needs chunk-table seeking instead of a memmap. ASCII PLY cannot be supported
+  this way at all: variable-length records have no stride to index by.
 - In an **RGB-segmented** (raycloudtools) PLY the label lives in the point's
   colour, and noise and unassigned points are both written back as black — the
   two are indistinguishable once such a file is reloaded.
