@@ -48,14 +48,9 @@ The per-point tree ID field is auto-detected (`treeID`, `PredInstance`,
 ## Editing workflow
 
 Navigation matches CloudCompare: clouds open **Z-up**, **left-drag rotates,
-right-drag pans, wheel zooms**. The window opens maximised with napari's
-stock chrome (menu bar, layer list/controls, console) hidden — everything
-you need is in the segfix panel, including a **Point size** spinner that
-applies across tile/tree loads.
-
-The panel is a **review queue**: the Trees table lists every tree with a
+right-drag pans, wheel zooms**. The panel top right table is basically a **review queue**: the table lists every tree with a
 done checkbox, and progress is saved to a `<cloud>.segfix.json` sidecar so a
-half-finished plot resumes where you left off.
+half-finished plot resumes where you left off. The lower table is similar, but show the currently loaded trees, which is the selected tree and its neighbors.
 
 1. Press **Space** (or click a table row) to start reviewing. The camera
    flies to the tree and a wireframe box marks it. To declutter a crowded
