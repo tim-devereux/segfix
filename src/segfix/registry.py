@@ -70,6 +70,40 @@ def add_entry(path: str, kind: str, registry_file: Path | None = None) -> None:
     _write(entries[:MAX_ENTRIES], target)
 
 
+def describe_age(last_opened: str, *, now: float | None = None) -> str:
+    """Human phrasing of when an entry was last opened, for the startup list.
+
+    ``"just now"`` / ``"5 min ago"`` / ``"3 hr ago"`` / ``"yesterday"`` /
+    ``"4 days ago"`` for the past week, then the plain ``YYYY-MM-DD`` date.
+    Returns ``""`` if ``last_opened`` is missing or unparseable. The stored
+    timestamps are local-time and naive (see :func:`add_entry`), so they are
+    read back as local time here too.
+    """
+    if not last_opened:
+        return ""
+    try:
+        struct = time.strptime(last_opened, "%Y-%m-%dT%H:%M:%S")
+    except (ValueError, TypeError):
+        return ""
+    delta = (time.time() if now is None else now) - time.mktime(struct)
+    minutes = delta / 60
+    if minutes < 1:
+        return "just now"
+    if minutes < 60:
+        n = int(minutes)
+        return f"{n} min ago"
+    hours = minutes / 60
+    if hours < 24:
+        n = int(hours)
+        return f"{n} hr ago"
+    days = int(hours / 24)
+    if days == 1:
+        return "yesterday"
+    if days < 7:
+        return f"{days} days ago"
+    return time.strftime("%Y-%m-%d", struct)
+
+
 def _write(entries: list[dict], path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps({"entries": entries}, indent=2))

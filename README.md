@@ -41,7 +41,8 @@ always saved to the copy, never the original source file.
 
 Every project opened this way is recorded in `~/.config/segfix/registry.json`
 (a plain JSON file, not a database) so it shows up in the "Recent projects"
-list next time.
+list next time — most-recently-opened at the top and preselected, each row
+showing how long ago it was last opened.
 
 The per-point tree ID field is auto-detected (`treeID`, `PredInstance`,
 `label`, …); override with `--label-field NAME` if needed.

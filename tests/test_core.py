@@ -46,6 +46,83 @@ def test_no_op_records_no_undo():
     assert not c.can_undo
 
 
+def test_last_changed_tracks_touched_indices():
+    c = make_cloud()
+    assert c.last_changed is None  # nothing edited yet
+
+    ops.reassign(c, [0, 1, 2], 2)
+    assert sorted(c.last_changed.tolist()) == [0, 1, 2]
+
+    ops.reassign(c, [3], 3)
+    assert c.last_changed.tolist() == [3]
+
+    c.undo()  # undoes the [3] edit
+    assert c.last_changed.tolist() == [3]
+    c.redo()
+    assert c.last_changed.tolist() == [3]
+
+    # A no-op (already tree 2) and an exhausted undo both report "nothing".
+    ops.reassign(c, [0], 2)
+    assert c.last_changed.size == 0
+    for _ in range(10):
+        c.undo()
+    assert c.last_changed.size == 0
+
+
+def test_refresh_layer_incremental_matches_full_recompute():
+    """The per-edit fast path (recolour only `changed` rows) must land on the
+    exact same face_color array as a whole-cloud recompute."""
+    from segfix.viewer import colors_for_labels, refresh_layer
+
+    class _StubLayer:
+        def __init__(self, n):
+            self.face_color = np.zeros((n, 4), np.float32)
+            self.features = None
+            self._refreshed = 0
+
+        def refresh(self):
+            self._refreshed += 1
+
+    rng = np.random.RandomState(0)
+    coords = rng.rand(400, 3).astype(np.float32)
+    labels = rng.randint(1, 9, size=400).astype(np.int32)
+    cloud = PointCloud(coords=coords, labels=labels)
+
+    layer = _StubLayer(cloud.n_points)
+    refresh_layer(layer, cloud)  # initial full paint
+    np.testing.assert_array_equal(
+        layer.face_color, colors_for_labels(cloud.labels)
+    )
+
+    # Each edit refreshes incrementally (as _after_edit does per op); the
+    # running array must stay identical to a from-scratch recompute.
+    for _ in range(5):
+        ops.reassign(
+            cloud, rng.choice(400, 40, replace=False), int(rng.randint(1, 9))
+        )
+        refresh_layer(layer, cloud, changed=cloud.last_changed)
+        np.testing.assert_array_equal(
+            layer.face_color, colors_for_labels(cloud.labels)
+        )
+    ops.create_new(cloud, rng.choice(400, 15, replace=False))  # brand-new id
+    refresh_layer(layer, cloud, changed=cloud.last_changed)
+    np.testing.assert_array_equal(
+        layer.face_color, colors_for_labels(cloud.labels)
+    )
+    cloud.undo()
+    refresh_layer(layer, cloud, changed=cloud.last_changed)
+    np.testing.assert_array_equal(
+        layer.face_color, colors_for_labels(cloud.labels)
+    )
+
+    # An empty `changed` (no-op edit) leaves the layer untouched.
+    before = layer.face_color.copy()
+    hits = layer._refreshed
+    refresh_layer(layer, cloud, changed=np.empty(0, np.int64))
+    np.testing.assert_array_equal(layer.face_color, before)
+    assert layer._refreshed == hits
+
+
 def test_colors_for_labels_fades_only_requested_trees():
     from segfix.viewer import FADED_ALPHA, colors_for_labels
 

@@ -1,4 +1,5 @@
 import json
+import time
 
 import pytest
 
@@ -82,6 +83,27 @@ def test_corrupt_registry_file_returns_empty(tmp_path):
     target = tmp_path / "registry.json"
     target.write_text("not valid json{{{")
     assert registry.load_registry(target) == []
+
+
+def test_describe_age_phrasing():
+    base = time.mktime(time.strptime("2026-08-29T12:00:00", "%Y-%m-%dT%H:%M:%S"))
+
+    def ago(seconds):
+        stamp = time.strftime(
+            "%Y-%m-%dT%H:%M:%S", time.localtime(base - seconds)
+        )
+        return registry.describe_age(stamp, now=base)
+
+    assert ago(10) == "just now"
+    assert ago(5 * 60) == "5 min ago"
+    assert ago(3 * 3600) == "3 hr ago"
+    assert ago(26 * 3600) == "yesterday"
+    assert ago(4 * 86400) == "4 days ago"
+    assert ago(30 * 86400) == "2026-07-30"  # older than a week → date
+    # Missing / malformed timestamps degrade to an empty string, not a crash.
+    assert registry.describe_age("") == ""
+    assert registry.describe_age("not-a-date") == ""
+    assert registry.describe_age(None) == ""
 
 
 def test_workspace_kind_records_folder_not_data_file(tmp_path):

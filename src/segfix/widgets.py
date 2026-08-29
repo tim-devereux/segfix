@@ -103,7 +103,12 @@ class SegFixController:
         return np.fromiter(self.layer.selected_data, dtype=np.int64)
 
     def _after_edit(self, message: str) -> None:
-        refresh_layer(self.layer, self.cloud, self.faded_ids)
+        # Recolour only the points whose label just moved (the op records them
+        # on the cloud); a whole-cloud recompute per keystroke is the slow path.
+        refresh_layer(
+            self.layer, self.cloud, self.faded_ids,
+            changed=self.cloud.last_changed,
+        )
         self.layer.selected_data = set()
         self.viewer.status = message
 

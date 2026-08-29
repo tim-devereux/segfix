@@ -40,16 +40,26 @@ def neighbours_by_points(
         return set()
     lo = coords[mine].min(axis=0) - reach
     hi = coords[mine].max(axis=0) + reach
-    in_box = np.all((coords >= lo) & (coords <= hi), axis=1)
+    # Per-axis chained test avoids two full (N, 3) boolean temporaries.
+    cx, cy, cz = coords[:, 0], coords[:, 1], coords[:, 2]
+    in_box = (
+        (cx >= lo[0]) & (cx <= hi[0])
+        & (cy >= lo[1]) & (cy <= hi[1])
+        & (cz >= lo[2]) & (cz <= hi[2])
+    )
     in_box[mine] = False
-    cand = np.unique(labels[in_box])
+    # Everything below works off the in-box points only, so the per-candidate
+    # loop no longer rescans all N labels once per candidate.
+    box_idx = np.flatnonzero(in_box)
+    box_labels = labels[box_idx]
+    cand = np.unique(box_labels)
     cand = cand[(cand != UNASSIGNED) & (cand != NOISE) & (cand != tid)]
     if not cand.size:
         return set()
     kd = cKDTree(coords[_sample(rng, mine)])
     out: set[int] = set()
     for t in cand:
-        theirs = np.flatnonzero(in_box & (labels == t))
+        theirs = box_idx[box_labels == t]
         d, _ = kd.query(
             coords[_sample(rng, theirs)], k=1, distance_upper_bound=reach
         )

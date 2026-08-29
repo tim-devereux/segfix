@@ -56,6 +56,24 @@ def three_trees(tmp_path, request):
     return str(path), {"A": 1, "B": 2, "C": 3}
 
 
+def test_build_index_records_match_hand_computed_stats(three_trees):
+    """Locks the vectorised (reduceat) per-tree bbox/centroid/count path."""
+    path, ids = three_trees
+    catalog = open_catalog(path)
+
+    for name, geom in (("A", _A), ("B", _B), ("C", _C)):
+        rec = catalog.records[ids[name]]
+        lo, hi = geom.min(axis=0), geom.max(axis=0)
+        assert rec.count == len(geom)
+        np.testing.assert_allclose(rec.bbox[0], lo, atol=1e-5)
+        np.testing.assert_allclose(rec.bbox[1], hi, atol=1e-5)
+        np.testing.assert_allclose(
+            rec.centroid, ((lo[0] + hi[0]) / 2, (lo[1] + hi[1]) / 2), atol=1e-5
+        )
+    # Unassigned / noise never get a record.
+    assert 0 not in catalog.records and -1 not in catalog.records
+
+
 def test_neighbours_matches_full_cloud_analysis(three_trees):
     path, ids = three_trees
     catalog = open_catalog(path)

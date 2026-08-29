@@ -62,6 +62,11 @@ class PointCloud:
     # both for display and to write colours back on save.
     label_colors: dict | None = None
 
+    # Indices touched by the most recent set_labels/undo/redo (empty on a
+    # no-op, None before the first edit). Lets the viewer recolour just the
+    # points that changed instead of the whole cloud on every keystroke.
+    last_changed: np.ndarray | None = field(default=None, repr=False)
+
     _undo: list[_Edit] = field(default_factory=list, repr=False)
     _redo: list[_Edit] = field(default_factory=list, repr=False)
 
@@ -98,17 +103,21 @@ class PointCloud:
         undo entry is recorded).
         """
         indices = np.asarray(indices, dtype=np.int64).reshape(-1)
+        empty = np.empty(0, dtype=np.int64)
         if indices.size == 0:
+            self.last_changed = empty
             return 0
         old = self.labels[indices].copy()
         changed = old != new_value
         if not changed.any():
+            self.last_changed = empty
             return 0
         indices = indices[changed]
         old = old[changed]
         self.labels[indices] = new_value
         self._undo.append(_Edit(indices, old, int(new_value), description))
         self._redo.clear()
+        self.last_changed = indices
         return int(indices.size)
 
     # -- undo / redo -----------------------------------------------------
@@ -122,6 +131,7 @@ class PointCloud:
 
     def undo(self) -> str | None:
         if not self._undo:
+            self.last_changed = np.empty(0, dtype=np.int64)
             return None
         edit = self._undo.pop()
         # Restore old values, capturing what they were so redo can re-apply.
@@ -130,10 +140,12 @@ class PointCloud:
         self._redo.append(
             _Edit(edit.indices, current, edit.new_value, edit.description)
         )
+        self.last_changed = edit.indices
         return edit.description
 
     def redo(self) -> str | None:
         if not self._redo:
+            self.last_changed = np.empty(0, dtype=np.int64)
             return None
         edit = self._redo.pop()
         current = self.labels[edit.indices].copy()
@@ -141,4 +153,5 @@ class PointCloud:
         self._undo.append(
             _Edit(edit.indices, current, edit.new_value, edit.description)
         )
+        self.last_changed = edit.indices
         return edit.description

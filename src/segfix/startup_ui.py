@@ -75,10 +75,19 @@ class StartupDialog(QDialog):
         layout.addLayout(row)
 
     def _populate(self) -> None:
+        # registry.load_registry() is already most-recently-opened first, so
+        # the newest project lands at the top (and is preselected below).
         self.list.clear()
         for entry in registry.load_registry():
             mark = _ICONS.get(entry["type"], "📄")
-            item = QListWidgetItem(f"{mark}  {entry['path']}")
+            age = registry.describe_age(entry.get("last_opened", ""))
+            label = f"{mark}  {entry['path']}"
+            if age:
+                label += f"   —  {age}"
+            item = QListWidgetItem(label)
+            item.setToolTip(
+                f"Last opened {entry.get('last_opened', 'unknown')}"
+            )
             item.setData(Qt.UserRole, entry)
             self.list.addItem(item)
         if self.list.count():

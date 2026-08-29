@@ -99,23 +99,35 @@ class _BaseCatalog:
         """
         self.order = np.argsort(self.labels, kind="stable")
         sorted_labels = self.labels[self.order]
-        uniq, counts = np.unique(sorted_labels, return_counts=True)
-        starts = np.concatenate([[0], np.cumsum(counts)[:-1]])
+        # On a sorted array np.unique's first-occurrence index is the group
+        # start, so this replaces a separate cumsum.
+        uniq, starts, counts = np.unique(
+            sorted_labels, return_index=True, return_counts=True
+        )
         self._starts = dict(zip(uniq.tolist(), starts.tolist()))
         self._counts = dict(zip(uniq.tolist(), counts.tolist()))
+
+        # Per-tree bbox/centroid in two vectorised reductions over the
+        # label-sorted coords, instead of a fancy-index + min/max per tree —
+        # this runs on every apply() (tree switch, Save), so the Python loop
+        # it replaces was O(trees) numpy calls on multi-thousand-tree plots.
         self.records: dict[int, TreeRecord] = {}
-        for lab, start, cnt in zip(uniq.tolist(), starts.tolist(), counts.tolist()):
+        if not uniq.size:
+            return
+        sorted_coords = self.coords[self.order]
+        mins = np.minimum.reduceat(sorted_coords, starts, axis=0)
+        maxs = np.maximum.reduceat(sorted_coords, starts, axis=0)
+        for k, lab in enumerate(uniq.tolist()):
             if lab in (UNASSIGNED, NOISE):
                 continue
-            idx = self.order[start:start + cnt]
-            self.records[lab] = self._make_record(lab, idx)
-
-    def _make_record(self, label: int, idx: np.ndarray) -> TreeRecord:
-        pts = self.coords[idx]
-        lo, hi = pts.min(axis=0), pts.max(axis=0)
-        centroid = (float((lo[0] + hi[0]) / 2), float((lo[1] + hi[1]) / 2))
-        return TreeRecord(label=label, count=int(idx.size), centroid=centroid,
-                           bbox=(lo, hi))
+            lo, hi = mins[k], maxs[k]
+            self.records[lab] = TreeRecord(
+                label=lab,
+                count=int(counts[k]),
+                centroid=(float((lo[0] + hi[0]) / 2),
+                          float((lo[1] + hi[1]) / 2)),
+                bbox=(lo, hi),
+            )
 
     def indices_for(self, label: int) -> np.ndarray:
         start = self._starts.get(label)

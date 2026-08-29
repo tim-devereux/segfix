@@ -373,12 +373,32 @@ def apply_cloudcompare_controls(viewer) -> None:
         cam.viewbox_mouse_event = handler
 
 
-def refresh_layer(layer, cloud: PointCloud, faded=None) -> None:
+def refresh_layer(layer, cloud: PointCloud, faded=None, changed=None) -> None:
     """Re-apply colours/features after the labels have changed.
 
     ``faded`` (an iterable of tree IDs) keeps those trees ghosted through the
     refresh, so an edit doesn't silently un-fade them.
+
+    ``changed`` is the indices whose label just moved (``cloud.last_changed``).
+    When given non-empty, only those rows of the existing ``face_color`` array
+    are recomputed instead of the whole cloud — the common case on a per-edit
+    keystroke. An empty ``changed`` means the op was a no-op, so nothing needs
+    redrawing at all.
     """
+    if changed is not None and len(changed) == 0:
+        return
     layer.features = {cloud.label_field: cloud.labels.copy()}
-    layer.face_color = colors_for_labels(cloud.labels, cloud.label_colors, faded)
+    fc = layer.face_color
+    if (
+        changed is not None
+        and isinstance(fc, np.ndarray)
+        and fc.shape == (cloud.n_points, 4)
+    ):
+        fc = fc.copy()
+        fc[changed] = colors_for_labels(
+            np.asarray(cloud.labels)[changed], cloud.label_colors, faded
+        )
+        layer.face_color = fc
+    else:
+        layer.face_color = colors_for_labels(cloud.labels, cloud.label_colors, faded)
     layer.refresh()
