@@ -247,3 +247,117 @@ def test_workspace_decompresses_laz_on_import(tmp_path):
     exported = tmp_path / "proj" / "plot.laz"
     assert exported.exists()
     assert 1 not in np.unique(laspy.read(str(exported)).treeID)
+
+
+def test_las_catalog_signed_treeid_keeps_noise(tmp_path):
+    """A signed treeID column can hold NOISE (-1); it must round-trip so a
+    reopened project still shows those points as dismissed."""
+    import laspy
+    from segfix.treecatalog import open_catalog
+
+    coords = np.random.RandomState(7).rand(40, 3).astype(np.float64) * 10
+    path = tmp_path / "signed.las"
+    _write_arbor_las(path, coords, np.repeat([1, 2, 3, 4], 10))
+
+    cat = open_catalog(str(path))
+    assert cat._label_is_unsigned is False
+    cloud, gidx = cat.load([2], margin=0.0)
+    cloud.set_labels(np.flatnonzero(cloud.labels == 2), NOISE, "dismiss 2")
+    cat.apply(cloud, gidx)
+    cat.save()
+
+    back = np.asarray(laspy.read(str(path)).treeID)
+    assert (back == NOISE).sum() == 10
+    assert sorted(np.unique(back).tolist()) == [NOISE, 1, 3, 4]
+
+
+def test_las_catalog_unsigned_treeid_writes_noise_as_unassigned(tmp_path):
+    """An unsigned treeID column can't store -1 — NOISE points are written
+    back as UNASSIGNED (0) rather than wrapping to a huge value."""
+    import laspy
+    from segfix.treecatalog import open_catalog
+
+    coords = np.random.RandomState(8).rand(40, 3).astype(np.float64) * 10
+    path = tmp_path / "unsigned.las"
+    _write_arbor_las(path, coords, np.repeat([1, 2, 3, 4], 10),
+                     extra_unsigned=True)
+
+    cat = open_catalog(str(path))
+    assert cat._label_is_unsigned is True
+    cloud, gidx = cat.load([2], margin=0.0)
+    cloud.set_labels(np.flatnonzero(cloud.labels == 2), NOISE, "dismiss 2")
+    cat.apply(cloud, gidx)
+    cat.save()
+
+    back = np.asarray(laspy.read(str(path)).treeID)
+    assert back.min() >= 0  # no unsigned wraparound
+    assert (back == UNASSIGNED).sum() == 10
+    assert sorted(np.unique(back).tolist()) == [0, 1, 3, 4]
+
+
+def test_las_catalog_rejects_laz_path(tmp_path):
+    """workspace decompresses to .las on import; a .laz handed straight to the
+    catalog is refused rather than silently failing to memory-map."""
+    from segfix.treecatalog import LasCatalog, open_catalog
+
+    coords = np.random.RandomState(9).rand(12, 3).astype(np.float64) * 3
+    las_path = tmp_path / "p.las"
+    _write_arbor_las(las_path, coords, np.repeat([1, 2], 6))
+    laz_path = tmp_path / "p.laz"
+    import laspy
+
+    laspy.read(str(las_path)).write(str(laz_path))
+
+    with pytest.raises(ValueError, match="uncompressed"):
+        LasCatalog(str(laz_path))
+    with pytest.raises(ValueError, match="uncompressed"):
+        open_catalog(str(laz_path))
+
+
+def test_las_catalog_rejects_truncated_las(tmp_path):
+    """If the point records don't fill the file the header claims, bail with
+    an explanation instead of a later out-of-bounds memmap read."""
+    from segfix.treecatalog import open_catalog
+
+    coords = np.random.RandomState(10).rand(30, 3).astype(np.float64) * 5
+    path = tmp_path / "trunc.las"
+    _write_arbor_las(path, coords, np.repeat([1, 2, 3], 10))
+    path.write_bytes(path.read_bytes()[:-40])  # drop a whole point record
+
+    with pytest.raises(ValueError, match="line up"):
+        open_catalog(str(path))
+
+
+def test_las_save_as_reexports_laz_in_a_laz_project(tmp_path):
+    """Save As inside a project imported from .laz drops a matching .laz next
+    to the new .las target too, not just on in-place saves."""
+    import json
+    import laspy
+    from segfix import workspace
+    from segfix.treecatalog import open_catalog
+
+    coords = np.random.RandomState(11).rand(30, 3).astype(np.float64) * 6
+    src = tmp_path / "stand.laz"
+    _write_arbor_las(src, coords, np.repeat([1, 2, 3], 10))
+    dest = workspace.create_workspace(str(src), tmp_path / "proj")
+
+    cat = open_catalog(str(dest))
+    cloud, gidx = cat.load([1], margin=0.0)
+    cloud.set_labels(np.flatnonzero(cloud.labels == 1), 2, "merge 1->2")
+    cat.apply(cloud, gidx)
+
+    target = tmp_path / "proj" / "corrected.las"
+    msg = cat.save(output=str(target))
+    assert msg.startswith("Saved")
+    assert target.exists()
+    sibling_laz = tmp_path / "proj" / "corrected.laz"
+    assert sibling_laz.exists()
+    assert 1 not in np.unique(laspy.read(str(sibling_laz)).treeID)
+
+    # The in-place .las / .laz and the original .laz are all left alone.
+    assert 1 in np.unique(laspy.read(str(dest)).treeID)
+    assert 1 in np.unique(laspy.read(str(src)).treeID)
+    manifest = json.loads(
+        (tmp_path / "proj" / workspace.MANIFEST_NAME).read_text()
+    )
+    assert manifest["source"] == str(src.resolve())
