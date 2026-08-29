@@ -46,6 +46,20 @@ from .viewer import (
 )
 
 
+def _fit_group_title(box: QGroupBox) -> None:
+    """Keep a group box at least wide enough to draw its whole title.
+
+    A ``QGroupBox`` laid out in a horizontal strip is sized from its
+    *contents*.  When the title is wider than the controls inside it — as
+    with the short ``[On] [Slab…]`` row under "Cross section (C)" — Qt sizes
+    the box to the contents and clips the title, so the user sees
+    "Cross section (C" with the ")" cut off.  Raise the minimum width to the
+    title's own width plus the frame and title insets the style adds.
+    """
+    fm = box.fontMetrics()
+    box.setMinimumWidth(fm.horizontalAdvance(box.title()) + 30)
+
+
 class SegFixController:
     """Holds the editable cloud + napari layer and applies operations."""
 
@@ -348,6 +362,7 @@ class SegFixWidget(QWidget):
         slab_btn.clicked.connect(
             lambda: self._toggle_popover(self._cross_popover, slab_btn)
         )
+        _fit_group_title(self.cross_box)
         top_bar_row.addWidget(self.cross_box)
         self._cross_lo, self._cross_hi = 0.0, 1.0
         self._reset_cross_section_range()
@@ -389,6 +404,7 @@ class SegFixWidget(QWidget):
         lsec.addWidget(section_reset_btn)
         self.lasso_section_label = QLabel(self)  # not shown; feeds the tooltip
         self.lasso_section_label.hide()
+        _fit_group_title(self.lasso_section_box)
         top_bar_row.addWidget(self.lasso_section_box)
         self._lasso_section_mask: np.ndarray | None = None
         self._update_lasso_section_label()
