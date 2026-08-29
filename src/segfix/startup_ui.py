@@ -87,7 +87,8 @@ class StartupDialog(QDialog):
     def _new_project(self) -> None:
         source, _ = QFileDialog.getOpenFileName(
             self, "Import point cloud", str(Path.home()),
-            "Binary PLY point clouds (*.ply)",
+            "Point clouds (*.ply *.las *.laz);;Binary PLY (*.ply);;"
+            "LAS / LAZ (*.las *.laz)",
         )
         if not source:
             return
@@ -107,7 +108,7 @@ class StartupDialog(QDialog):
 
         try:
             data_path = workspace.create_workspace(source, candidate)
-        except OSError as exc:
+        except Exception as exc:  # OSError, or laspy failing on a bad LAS/LAZ
             QMessageBox.critical(self, "Import failed", str(exc))
             return
 

@@ -55,7 +55,8 @@ class PointCloud:
     label_field: str = "treeID"
     # How the cloud was loaded, so save() can round-trip the original format.
     # "auto" uses the path extension; "raycloud_rgb" means the segmentation is
-    # encoded as per-point RGB (see io.load_rgb_segmented).
+    # encoded as per-point RGB (see io.load_rgb_segmented); "las" means it came
+    # from a LAS/LAZ and save() clones that file to keep every other column.
     source_format: str = "auto"
     # For RGB-segmented clouds: the original colour of each tree label, used
     # both for display and to write colours back on save.

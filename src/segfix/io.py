@@ -1,13 +1,17 @@
-"""Load and save segmented point clouds as binary PLY.
+"""Load and save segmented point clouds as binary PLY or uncompressed LAS.
 
-Binary PLY is the only format segfix reads or writes: its fixed-size vertex
-records are what let :mod:`treecatalog` memory-map a plot and pull back one
-tree at a time, which the whole review workflow is built on. ASCII PLY has no
-such stride, and LAS/LAZ would need a separate reader and write-back path.
+Both formats store their points as fixed-size records at a known offset, which
+is what lets :mod:`treecatalog` memory-map a plot and pull back one tree at a
+time — the whole review workflow is built on that. ASCII PLY has no such
+stride and is refused; compressed ``.laz`` (arbor's output) is decompressed to
+``.las`` on import by :mod:`workspace`.
 
 The instance label lives either in a per-point field whose name varies between
 pipelines (``treeID``, ``PredInstance``, ``label`` ...), auto-detected from a
 list of common candidates, or in the point's RGB colour (raycloudtools).
+
+This module's :func:`load` / :func:`save` operate on a whole cloud at once;
+the tree-at-a-time path the GUI actually uses is :mod:`treecatalog`.
 """
 
 from __future__ import annotations
@@ -87,10 +91,14 @@ def _is_rgb_segmented(props, label_field) -> bool:
 
 
 def load(path: str, label_field: str | None = None) -> PointCloud:
-    """Read a binary PLY. Raises ``ValueError`` for anything else."""
+    """Read a binary PLY or LAS/LAZ. Raises ``ValueError`` for anything else."""
     ext = os.path.splitext(path)[1].lower()
+    if ext in (".las", ".laz"):
+        return _load_las(path, label_field)
     if ext != ".ply":
-        raise ValueError(f"segfix reads binary PLY only, not {ext or path!r}")
+        raise ValueError(
+            f"segfix reads binary PLY and LAS/LAZ, not {ext or path!r}"
+        )
     # Peek at the header: if the segmentation is encoded as RGB (no label
     # field but colour present), take the fast RGB-segmented path.
     with open(path, "rb") as fh:
@@ -163,8 +171,13 @@ def load_rgb_segmented(path: str) -> PointCloud:
 
 def save(cloud: PointCloud, path: str) -> None:
     ext = os.path.splitext(path)[1].lower()
+    if ext in (".las", ".laz"):
+        _save_las(cloud, path)
+        return
     if ext != ".ply":
-        raise ValueError(f"segfix writes binary PLY only, not {ext or path!r}")
+        raise ValueError(
+            f"segfix writes binary PLY and LAS/LAZ, not {ext or path!r}"
+        )
     if cloud.source_format == "raycloud_rgb":
         save_rgb_segmented(cloud, path)
     else:
@@ -322,3 +335,74 @@ def _save_ply(cloud: PointCloud, path: str) -> None:
 
     el = PlyElement.describe(vertex, "vertex")
     PlyData([el], text=False).write(path)
+
+
+# -- LAS / LAZ ---------------------------------------------------------------
+def _load_las(path: str, label_field: str | None) -> PointCloud:
+    """Read a whole LAS/LAZ into a :class:`PointCloud`.
+
+    The GUI never takes this path — it uses :class:`treecatalog.LasCatalog`,
+    which memory-maps the uncompressed records — but it keeps :func:`load`
+    format-complete for scripts and tests.
+    """
+    import laspy
+
+    las = laspy.read(path)
+    coords = np.asarray(las.xyz, dtype=np.float32)
+
+    names = list(las.point_format.dimension_names)
+    field = _pick_label_field(names, label_field)
+    if field is not None:
+        labels = np.asarray(las[field]).astype(np.int32)
+    else:
+        labels = np.zeros(len(coords), dtype=np.int32)
+        field = "treeID"
+
+    skip = {"X", "Y", "Z", "x", "y", "z", field}
+    attributes = {
+        name: np.asarray(las[name]) for name in names if name not in skip
+    }
+    return PointCloud(
+        coords=coords,
+        labels=labels,
+        attributes=attributes,
+        source_path=path,
+        label_field=field,
+        source_format="las",
+    )
+
+
+def _save_las(cloud: PointCloud, path: str) -> None:
+    """Write ``cloud`` as LAS/LAZ by cloning its source file and overwriting
+    only the label column, so every other dimension round-trips byte for byte.
+
+    Requires the cloud to have been loaded from a LAS/LAZ (``source_path``)
+    with the same point count — the label edits are mapped back position for
+    position. Raises ``ValueError`` otherwise.
+    """
+    import laspy
+
+    src = cloud.source_path
+    if not src or os.path.splitext(src)[1].lower() not in (".las", ".laz"):
+        raise ValueError(
+            "saving LAS/LAZ needs a cloud loaded from one (to preserve its "
+            "header and every other per-point column)"
+        )
+    las = laspy.read(src)
+    if len(las.points) != cloud.n_points:
+        raise ValueError(
+            f"{src} has {len(las.points)} points but the cloud has "
+            f"{cloud.n_points}; can't map labels back"
+        )
+
+    field = cloud.label_field or "treeID"
+    if field not in las.point_format.dimension_names:
+        las.add_extra_dim(laspy.ExtraBytesParams(name=field, type=np.int32,
+                                                 description="tree instance ID"))
+    values = np.asarray(cloud.labels)
+    if las[field].dtype.kind == "u":
+        from .model import NOISE, UNASSIGNED
+
+        values = np.where(values == NOISE, UNASSIGNED, values)
+    las[field] = values.astype(las[field].dtype)
+    las.write(path)

@@ -30,6 +30,7 @@ pip install -e .
 segfix
 # or generate a practice cloud with built-in segmentation errors first:
 python scripts/make_sample.py sample.ply
+python scripts/make_sample.py --format las sample.las   # arbor-shaped LAS
 ```
 
 `segfix` always opens a startup dialog — there is no path argument. Double-click
@@ -45,13 +46,46 @@ list next time.
 The per-point tree ID field is auto-detected (`treeID`, `PredInstance`,
 `label`, …); override with `--label-field NAME` if needed.
 
-**Binary PLY only** — RGB-segmented (raycloudtools) or with a label field.
-That is not arbitrary: binary PLY stores its vertices as fixed-size records at
-a known offset, which is what lets `treecatalog.py` memory-map a whole plot and
-read back just the points of one tree. ASCII PLY has variable-length records
-with no stride to index by, so the same trick is impossible; LAS/LAZ could
-support it in principle but would need their own reader and in-place write-back.
-Both are refused at load with an explanation rather than half-working.
+### Accepted formats
+
+**Binary PLY** — RGB-segmented (raycloudtools) or with a label field — and
+**LAS**. Both store their points as fixed-size records at a known offset, which
+is what lets `treecatalog.py` memory-map a whole plot, read back just the points
+of one tree, and on save patch only the label bytes that changed. ASCII PLY has
+variable-length records with no stride to index by, so it is refused at load
+with an explanation rather than half-working.
+
+### arbor output
+
+[arbor](https://github.com/r-lidar/arbor)'s pipeline (`arbor segment …`) writes
+`<plot>_output/<plot>_segmented.laz` — a point cloud with a per-point `treeID`
+Extra-Bytes column (`0` = unassigned). Import that `.laz` directly: segfix
+decompresses it to a `.las` working copy in the project folder (the original
+`.laz` is never touched), you fix the `treeID`s with the workflow below, and
+**Save** patches the `.las` in place *and* re-compresses a fresh `.laz` beside
+it for arbor to re-read.
+
+One caveat: if a cloud's `treeID` column is an *unsigned* type, points you
+dismiss as noise (`X`) are written back as `0` (unassigned) — segfix's own
+`.segfix.json` sidecar still remembers they were noise, but a reader of the LAS
+alone cannot tell noise from unassigned. (arbor writes a signed `treeID`, so
+this does not apply to its output.)
+
+### raycloudtools output
+
+[raycloudtools](https://github.com/csiro-robotics/raycloudtools)' `rayextract
+trees` writes `<plot>_segmented.ply` — a binary PLY with no label column, each
+point instead **coloured by tree** (`x y z time nx ny nz red green blue alpha`,
+double xyz). segfix detects the RGB encoding, maps each distinct colour to a
+tree, and treats pure black `(0, 0, 0)` as unsegmented. Import the `.ply`
+directly; **Save** patches the colour bytes of points whose tree changed, in
+place, so the file stays in exactly the format `rayextract` produced.
+
+One caveat: noise (`X`) and unassigned points are **both** written back as black,
+so once such a file is reloaded the two are indistinguishable (segfix's
+`.segfix.json` sidecar still remembers which were noise for the current
+project). New trees created during editing (`N`, splits) get a deterministic
+colour derived from their id.
 
 ## Editing workflow
 
@@ -124,17 +158,17 @@ working copy, so a half-finished plot resumes where you left off.
 | File | Responsibility |
 |------|----------------|
 | `model.py` | `PointCloud` data + undo/redo (diff-based) |
-| `io.py` | load/save binary PLY, label-field and RGB-segmentation detection |
+| `io.py` | whole-cloud load/save (binary PLY, LAS/LAZ), label-field and RGB-segmentation detection |
 | `operations.py` | pure, UI-agnostic label edits (reassign/split/unassign/noise) |
 | `analysis.py` | which trees touch which, by sampled point distance (KD-tree) |
 | `lasso.py` | 3D screen-space lasso: camera projection + polygon test |
 | `viewer.py` | napari layer + label→colour mapping |
 | `widgets.py` | Qt dock panel wiring selection → operations |
 | `icons.py` | inline SVG icons for the panel buttons and window |
-| `treecatalog.py` | default mode: memory-mapped tree-label grouping, neighbour load + write-back |
+| `treecatalog.py` | default mode: memory-mapped tree-label grouping, neighbour load + write-back (`TreeCatalog` = PLY, `LasCatalog` = LAS, `open_catalog` picks) |
 | `scene_ui.py` | tree table + scene controller for the default mode |
 | `registry.py` | on-disk list of recently opened files/projects |
-| `workspace.py` | project folders: copy an imported file, never touch the source |
+| `workspace.py` | project folders: copy (or decompress `.laz`→`.las`) an imported file, never touch the source |
 | `startup_ui.py` | startup dialog: pick a recent entry or start a new project |
 | `app.py` | `segfix` CLI entry point |
 
@@ -143,9 +177,3 @@ working copy, so a half-finished plot resumes where you left off.
 ```bash
 pytest        # core model, operations, and IO round-trip (no GUI needed)
 ```
-
-## Notes
-
-- In an **RGB-segmented** (raycloudtools) PLY the label lives in the point's
-  colour, and noise and unassigned points are both written back as black — the
-  two are indistinguishable once such a file is reloaded.

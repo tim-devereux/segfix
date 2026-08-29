@@ -5,6 +5,12 @@ happen on the copy — the original source file is never opened for writing.
 One workspace wraps exactly one imported file: the startup dialog
 (:mod:`startup_ui`) creates it on import, and the folder — not the copy
 inside it — is what gets remembered in :mod:`registry`.
+
+A ``.laz`` source (what arbor's pipeline emits) is decompressed to a ``.las``
+working copy on import — segfix edits by memory-mapping fixed-size point
+records, which compressed LAZ has no room for. The manifest still records the
+original ``.laz`` path, so :meth:`treecatalog.LasCatalog.save` knows to
+re-compress the corrected cloud back to ``.laz`` beside the ``.las``.
 """
 
 from __future__ import annotations
@@ -37,11 +43,19 @@ def create_workspace(source: str | Path, workspace_dir: str | Path) -> Path:
     if workspace_dir.exists() and any(workspace_dir.iterdir()):
         raise FileExistsError(f"{workspace_dir} already exists and is not empty")
     workspace_dir.mkdir(parents=True, exist_ok=True)
-    dest = workspace_dir / source.name
-    shutil.copyfile(source, dest)
+    if source.suffix.lower() == ".laz":
+        # Decompress to a .las working copy: segfix patches points by
+        # memory-mapping fixed-size records, which LAZ doesn't allow.
+        import laspy
+
+        dest = workspace_dir / (source.stem + ".las")
+        laspy.read(str(source)).write(str(dest))
+    else:
+        dest = workspace_dir / source.name
+        shutil.copyfile(source, dest)
     manifest = {
         "source": str(source.resolve()),
-        "data_file": source.name,
+        "data_file": dest.name,
         "created": time.strftime("%Y-%m-%dT%H:%M:%S"),
     }
     (workspace_dir / MANIFEST_NAME).write_text(json.dumps(manifest, indent=2))

@@ -16,6 +16,11 @@ dependencies = [
     "numpy>=1.24",
     "plyfile>=1.0",
     "scipy>=1.10",
+    # arbor's pipeline emits segmented .laz; laspy reads the header + Extra-Bytes
+    # layout and does the .laz<->.las conversion. Per-point read/write still goes
+    # through numpy.memmap on the uncompressed .las (see treecatalog.LasCatalog).
+    # lazrs is the LAZ backend (laszip works too if that's what's installed).
+    "laspy[lazrs]>=2.5",
 ]
 
 [project.optional-dependencies]

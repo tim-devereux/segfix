@@ -7,9 +7,15 @@ labels real scans always carry: a scatter of unassigned ground/understory
 points, and a handful of noise points floating with nothing near them.
 
 Usage:  python scripts/make_sample.py sample.ply
+        python scripts/make_sample.py --format las sample.las
+
+The ``.las`` form mimics arbor's output: XYZ plus a ``treeID`` Extra-Bytes
+column, so the LAS editing path (:class:`segfix.treecatalog.LasCatalog`) has
+something to open without running the arbor pipeline.
 """
 
-import sys
+import argparse
+import os
 
 import numpy as np
 
@@ -51,6 +57,25 @@ def floaters(bounds, n=15, z_range=(3.0, 12.0), rng=None):
     return np.column_stack([x, y, z]).astype(np.float32)
 
 
+def _write_las(coords: np.ndarray, labels: np.ndarray, out: str) -> None:
+    """Write an arbor-shaped LAS/LAZ: XYZ + an int ``treeID`` Extra-Bytes
+    column (``0`` = unassigned, as arbor writes it)."""
+    import laspy
+
+    header = laspy.LasHeader(version="1.4", point_format=6)
+    header.offsets = np.floor(coords.min(axis=0))
+    header.scales = [0.001, 0.001, 0.001]
+    header.add_extra_dim(
+        laspy.ExtraBytesParams(name="treeID", type=np.int32,
+                               description="Unique ID per tree")
+    )
+    las = laspy.LasData(header)
+    las.x, las.y, las.z = coords[:, 0], coords[:, 1], coords[:, 2]
+    tid = np.where(labels == NOISE, UNASSIGNED, labels)  # LAS has no noise id
+    las.treeID = tid.astype(np.int32)
+    las.write(out)
+
+
 def main(out):
     rng = np.random.default_rng(42)
     parts, labels = [], []
@@ -81,15 +106,29 @@ def main(out):
 
     coords = np.vstack(parts)
     labels = np.concatenate(labels)
-    cloud = PointCloud(coords=coords, labels=labels)
-    io.save(cloud, out)
+
+    if os.path.splitext(out)[1].lower() in (".las", ".laz"):
+        _write_las(coords, labels, out)
+        n_points = len(coords)
+        tree_ids = sorted(set(labels.tolist()) - {UNASSIGNED, NOISE})
+    else:
+        cloud = PointCloud(coords=coords, labels=labels)
+        io.save(cloud, out)
+        n_points = cloud.n_points
+        tree_ids = sorted(cloud.tree_ids.tolist())
+
     n_unassigned = int(np.sum(labels == UNASSIGNED))
     n_noise = int(np.sum(labels == NOISE))
     print(
-        f"Wrote {cloud.n_points:,} points, trees {sorted(cloud.tree_ids.tolist())} "
+        f"Wrote {n_points:,} points, trees {tree_ids} "
         f"+ {n_unassigned:,} unassigned + {n_noise:,} noise → {out}"
     )
 
 
 if __name__ == "__main__":
-    main(sys.argv[1] if len(sys.argv) > 1 else "sample.ply")
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("out", nargs="?", help="output path (extension picks format)")
+    ap.add_argument("--format", choices=["ply", "las"], default="ply",
+                    help="format when OUT is omitted (default: ply)")
+    args = ap.parse_args()
+    main(args.out or f"sample.{args.format}")

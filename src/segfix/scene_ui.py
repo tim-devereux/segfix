@@ -1,5 +1,5 @@
 """The "All Trees" table for the default single-file mode: every tree in the
-file (from :class:`~segfix.treecatalog.TreeCatalog`); double-click loads that
+file (from a :mod:`~segfix.treecatalog` catalog); double-click loads that
 tree plus its spatial neighbours into the shared segfix editing panel.
 
 Docked at the top of the right-hand panel, directly above that editing panel
@@ -24,7 +24,7 @@ from qtpy.QtWidgets import (
     QWidget,
 )
 
-from .treecatalog import TreeCatalog
+from .treecatalog import Catalog
 from .viewer import add_cloud_layer, busy
 
 DEFAULT_REACH = 1.0  # metres; matches SegFixWidget's own "reach" spinner default
@@ -33,7 +33,7 @@ DEFAULT_REACH = 1.0  # metres; matches SegFixWidget's own "reach" spinner defaul
 class SceneController:
     """Owns the catalog and the shared segfix editing controller."""
 
-    def __init__(self, viewer, catalog: TreeCatalog, seg_controller,
+    def __init__(self, viewer, catalog: Catalog, seg_controller,
                  point_size: float = 0.01, reach: float = DEFAULT_REACH):
         self.viewer = viewer
         self.catalog = catalog

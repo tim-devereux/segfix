@@ -10,8 +10,10 @@ in the file, where double-clicking a row loads that tree plus its spatial
 neighbours rather than the whole cloud. See :mod:`treecatalog`/:mod:`scene_ui`.
 
 That mode needs to seek to an arbitrary point without parsing everything
-before it, so binary PLY — fixed-size vertex records at a known offset — is
-the only format accepted; :func:`segfix.io.load` rejects the rest.
+before it, so the accepted formats are the ones that store points as
+fixed-size records at a known offset: binary PLY and uncompressed LAS.
+arbor's ``.laz`` output is decompressed to ``.las`` on import (see
+:mod:`segfix.workspace`). :func:`segfix.io.load` rejects the rest.
 """
 
 from __future__ import annotations
@@ -210,13 +212,14 @@ def _dock_top(viewer, panel) -> None:
 
 
 def _run_scene(napari, args) -> int:
-    """Default mode for a single big binary PLY: a tree table where picking
-    a row loads that tree plus its neighbours, instead of the whole cloud."""
+    """Default mode for a single big cloud (binary PLY or uncompressed LAS):
+    a tree table where picking a row loads that tree plus its neighbours,
+    instead of the whole cloud."""
     import numpy as np
 
     from .model import PointCloud
     from .scene_ui import SceneController, SceneWidget
-    from .treecatalog import TreeCatalog
+    from .treecatalog import open_catalog
     from .viewer import add_cloud_layer, apply_cloudcompare_controls, busy, strip_ui
     from .widgets import SegFixController, SegFixWidget, bind_shortcuts
 
@@ -243,7 +246,7 @@ def _run_scene(napari, args) -> int:
     layer = add_cloud_layer(viewer, empty, point_size=args.point_size)
     busy(viewer, f"Scanning trees in {args.cloud}…")
 
-    catalog = TreeCatalog(args.cloud, label_field=args.label_field)
+    catalog = open_catalog(args.cloud, label_field=args.label_field)
 
     seg = SegFixController(viewer, empty, layer)
     panel = SegFixWidget(seg)
