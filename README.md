@@ -7,7 +7,7 @@ back to the PLY you started from.
 
 Built on [napari](https://napari.org) for fast 3D rendering and point selection.
 
-<img width="1920" height="1134" alt="image" src="https://github.com/user-attachments/assets/a3386292-249b-4866-93c9-8ca07f1dccd1" />
+<img width="1920" height="1013" alt="image" src="https://github.com/user-attachments/assets/dc454e6e-93ad-45f9-aa20-a61d225c0a94" />
 
 ## Contributing
 
