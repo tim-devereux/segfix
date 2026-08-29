@@ -18,7 +18,6 @@ from qtpy.QtCore import QSize, Qt
 from qtpy.QtGui import QBrush, QColor, QPixmap
 from qtpy.QtWidgets import (
     QAbstractItemView,
-    QCheckBox,
     QComboBox,
     QDoubleSpinBox,
     QGroupBox,
@@ -39,7 +38,6 @@ from .icons import icon
 from .lasso import LassoTool
 from .model import NOISE, UNASSIGNED, PointCloud
 from .viewer import (
-    add_gpu_status_widget,
     busy,
     colors_for_labels,
     refresh_layer,
@@ -55,6 +53,11 @@ class SegFixController:
         self.cloud = cloud
         self.layer = layer
         self.save_path = cloud.source_path
+        # Tree IDs the panel has "faded": rendered at FADED_ALPHA opacity but
+        # still shown and still selectable (unlike a hidden tree). Lives here,
+        # not on the widget like hidden_ids, because _after_edit re-applies the
+        # face colours and must keep these ghosted through the refresh.
+        self.faded_ids: set[int] = set()
         # Optional override: when set (project/scene mode), Save delegates
         # here instead of writing a single file. Signature: () -> str.
         self.on_save_override = None
@@ -78,6 +81,7 @@ class SegFixController:
         self.cloud = cloud
         self.layer = layer
         self.save_path = cloud.source_path
+        self.faded_ids = set()  # a fresh cloud starts with nothing faded
         self.lasso = LassoTool(self.viewer, layer, self._on_lasso)
         if was_armed:
             self.lasso.set_armed(True)
@@ -99,7 +103,7 @@ class SegFixController:
         return np.fromiter(self.layer.selected_data, dtype=np.int64)
 
     def _after_edit(self, message: str) -> None:
-        refresh_layer(self.layer, self.cloud)
+        refresh_layer(self.layer, self.cloud, self.faded_ids)
         self.layer.selected_data = set()
         self.viewer.status = message
 
@@ -110,6 +114,7 @@ class SegFixWidget(QWidget):
     DONE_BG = QColor(35, 62, 42)  # green tint marking finished rows
     BBOX_LAYER = "tree bbox"
     HIDE_COL = 3
+    FADE_COL = 4
 
     def __init__(self, controller: SegFixController):
         super().__init__()
@@ -131,8 +136,6 @@ class SegFixWidget(QWidget):
 
         self.info = QLabel()
 
-        add_gpu_status_widget(controller.viewer)
-
         # -- the queue: one row per tree, click = review that tree ------
         # "Selected Tree + Neighbours": just the trees currently loaded into
         # the 3D view (the row picked in "All Trees" above, plus whatever's
@@ -143,9 +146,9 @@ class SegFixWidget(QWidget):
         tlay = QVBoxLayout(self.trees_box)
         tlay.setSpacing(4)
         tlay.addWidget(self.info)  # "N points · M trees" for the loaded cloud
-        self.tree_table = QTableWidget(0, 4)
+        self.tree_table = QTableWidget(0, 5)
         self.tree_table.setHorizontalHeaderLabels(
-            ["Done", "Tree ID", "Points", "Hide"]
+            ["Done", "Tree ID", "Points", "Hide", "Fade"]
         )
         self.tree_table.horizontalHeaderItem(0).setToolTip(
             "Whether this tree has been marked reviewed"
@@ -153,6 +156,11 @@ class SegFixWidget(QWidget):
         self.tree_table.horizontalHeaderItem(self.HIDE_COL).setIcon(icon("hide"))
         self.tree_table.horizontalHeaderItem(self.HIDE_COL).setToolTip(
             "Hide this tree from the 3D view"
+        )
+        self.tree_table.horizontalHeaderItem(self.FADE_COL).setIcon(icon("fade"))
+        self.tree_table.horizontalHeaderItem(self.FADE_COL).setToolTip(
+            "Fade this tree in the 3D view — ghosted for context, but still "
+            "shown and still selectable"
         )
         self.tree_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.tree_table.setSelectionMode(QAbstractItemView.SingleSelection)
@@ -164,13 +172,16 @@ class SegFixWidget(QWidget):
         header.setSectionResizeMode(1, QHeaderView.Stretch)
         header.setSectionResizeMode(2, QHeaderView.ResizeToContents)
         header.setSectionResizeMode(self.HIDE_COL, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(self.FADE_COL, QHeaderView.ResizeToContents)
         self.tree_table.setMaximumHeight(200)
         self.tree_table.itemSelectionChanged.connect(self._on_table_selection)
         self.tree_table.itemChanged.connect(self._on_tree_item_changed)
         tlay.addWidget(self.tree_table)
 
         nav_row = QHBoxLayout()
-        prev_btn = QPushButton("◀ Prev")
+        prev_btn = QPushButton("Prev")
+        prev_btn.setIcon(icon("prev"))
+        prev_btn.setIconSize(QSize(18, 18))
         prev_btn.clicked.connect(lambda: self._step(-1))
         nav_row.addWidget(prev_btn)
         self.done_btn = QPushButton("✓ Done — next (Space)")
@@ -189,25 +200,36 @@ class SegFixWidget(QWidget):
         self.top_bar = QWidget()
         top_bar_row = QHBoxLayout(self.top_bar)
         top_bar_row.setContentsMargins(0, 0, 0, 0)
+        top_bar_row.setSpacing(6)
+
+        # The top bar is a single thin strip: every group is one content row,
+        # and the two section tools collapse to just their title/checkbox until
+        # switched on. Keep it that way when adding controls here.
 
         # -- interaction mode: move (camera) vs lasso -----------------
+        # The active mode shows as a coloured checked button — no separate
+        # indicator. Exactly one is ever checked (see _uncheck_other_modes /
+        # on_move_mode); section_draw_btn, built in the Lasso section box
+        # below, is the fourth mutually-exclusive member.
         interaction_box = QGroupBox("Interaction")
-        interaction = QVBoxLayout(interaction_box)
-        mode_row = QHBoxLayout()
+        interaction = QHBoxLayout(interaction_box)
+        interaction.setSpacing(3)
         self.move_btn = QPushButton("Move (Esc)")
         self.move_btn.setIcon(icon("move"))
         self.move_btn.setIconSize(QSize(18, 18))
         self.move_btn.setCheckable(True)
         self.move_btn.setChecked(True)
+        self.move_btn.setToolTip("Drag rotates the view")
         self.move_btn.clicked.connect(self.on_move_mode)
-        mode_row.addWidget(self.move_btn)
-        self.lasso_btn = QPushButton("Lasso select (L)")
+        interaction.addWidget(self.move_btn)
+        self.lasso_btn = QPushButton("Lasso (L)")
         self.lasso_btn.setIcon(icon("lasso"))
         self.lasso_btn.setIconSize(QSize(18, 18))
         self.lasso_btn.setCheckable(True)
+        self.lasso_btn.setToolTip("Drag selects points")
         self.lasso_btn.toggled.connect(self.on_toggle_lasso)
-        mode_row.addWidget(self.lasso_btn)
-        self.tree_lasso_btn = QPushButton("Lasso this tree (Ctrl+L)")
+        interaction.addWidget(self.lasso_btn)
+        self.tree_lasso_btn = QPushButton("Lasso tree (Ctrl+L)")
         self.tree_lasso_btn.setIcon(icon("lasso"))
         self.tree_lasso_btn.setIconSize(QSize(18, 18))
         self.tree_lasso_btn.setCheckable(True)
@@ -217,21 +239,43 @@ class SegFixWidget(QWidget):
             "area without also picking up neighbouring trees."
         )
         self.tree_lasso_btn.toggled.connect(self.on_toggle_tree_lasso)
-        mode_row.addWidget(self.tree_lasso_btn)
-        interaction.addLayout(mode_row)
-        self.mode_label = QLabel()
-        self.mode_label.setAlignment(Qt.AlignCenter)
-        interaction.addWidget(self.mode_label)
+        interaction.addWidget(self.tree_lasso_btn)
+        interaction.addStretch(1)
+        # Each mode button lights up in its own colour while active.
+        for btn, bg, fg in (
+            (self.move_btn, "#2c4a33", "#9fd8a8"),
+            (self.lasso_btn, "#7a6a20", "#ffe066"),
+            (self.tree_lasso_btn, "#6a3a7a", "#e0b3ff"),
+        ):
+            btn.setStyleSheet(
+                f"QPushButton:checked {{ background: {bg}; color: {fg}; "
+                "font-weight: bold; }"
+            )
         top_bar_row.addWidget(interaction_box)
 
         # -- view: what's visible/selectable, and how big it renders ---
+        # One row: unassigned toggle · declutter buttons · point size. The
+        # "others" buttons act on the whole loaded set, not the selection, so
+        # they belong here, not with the "Current tree" fix actions.
         view_box = QGroupBox("View")
         view = QVBoxLayout(view_box)
+        view.setSpacing(3)
         view_row = QHBoxLayout()
-        self.show_unassigned = QCheckBox("Show unassigned (H)")
+        view_row.setSpacing(6)
+        self.show_unassigned = QPushButton("Show unassigned (H)")
+        self.show_unassigned.setCheckable(True)
         self.show_unassigned.setChecked(True)
+        self.show_unassigned.setToolTip(
+            "Show or hide the unassigned + noise points"
+        )
+        self.show_unassigned.setStyleSheet(
+            "QPushButton:checked { background: #3a4450; font-weight: bold; }"
+        )
         self.show_unassigned.toggled.connect(self._on_show_unassigned)
-        view_row.addWidget(self.show_unassigned, stretch=1)
+        view_row.addWidget(self.show_unassigned)
+        self._button(view_row, "Hide others", self.on_hide_neighbours, "hide")
+        self._button(view_row, "Fade others", self.on_fade_neighbours, "fade")
+        view_row.addStretch(1)
         view_row.addWidget(QLabel("Point size"))
         self.size_spin = QDoubleSpinBox()
         self.size_spin.setRange(0.001, 1.0)
@@ -242,6 +286,7 @@ class SegFixWidget(QWidget):
         self.size_spin.valueChanged.connect(self._on_point_size)
         view_row.addWidget(self.size_spin)
         view.addLayout(view_row)
+
         top_bar_row.addWidget(view_box)
 
         # -- cross section: an interactive slab along one axis; while on,
@@ -256,6 +301,15 @@ class SegFixWidget(QWidget):
         )
         self.cross_box.toggled.connect(self._on_cross_section_toggled)
         cross = QVBoxLayout(self.cross_box)
+        cross.setContentsMargins(6, 2, 6, 4)
+        # Body collapses to nothing until the tool is switched on, so an idle
+        # Cross section is just its title-bar checkbox in the top strip.
+        self.cross_body = QWidget()
+        self.cross_body.setVisible(False)
+        cross.addWidget(self.cross_body)
+        cross_body_lay = QVBoxLayout(self.cross_body)
+        cross_body_lay.setContentsMargins(0, 0, 0, 0)
+        cross_body_lay.setSpacing(3)
         cross_top = QHBoxLayout()
         cross_top.addWidget(QLabel("Axis"))
         self.cross_axis_combo = QComboBox()
@@ -269,7 +323,7 @@ class SegFixWidget(QWidget):
         cross_top.addWidget(reset_btn)
         self.cross_range_label = QLabel()
         cross_top.addWidget(self.cross_range_label, stretch=1)
-        cross.addLayout(cross_top)
+        cross_body_lay.addLayout(cross_top)
         slab_row = QHBoxLayout()
         slab_row.addWidget(QLabel("Min"))
         self.cross_min_slider = QSlider(Qt.Horizontal)
@@ -279,7 +333,7 @@ class SegFixWidget(QWidget):
         self.cross_max_slider = QSlider(Qt.Horizontal)
         self.cross_max_slider.valueChanged.connect(self._on_cross_range_changed)
         slab_row.addWidget(self.cross_max_slider)
-        cross.addLayout(slab_row)
+        cross_body_lay.addLayout(slab_row)
         top_bar_row.addWidget(self.cross_box)
         self._cross_lo, self._cross_hi = 0.0, 1.0
         self._reset_cross_section_range()
@@ -300,6 +354,13 @@ class SegFixWidget(QWidget):
         )
         self.lasso_section_box.toggled.connect(self._on_lasso_section_toggled)
         lsec = QVBoxLayout(self.lasso_section_box)
+        lsec.setContentsMargins(6, 2, 6, 4)
+        self.lasso_body = QWidget()  # collapses until the tool is on
+        self.lasso_body.setVisible(False)
+        lsec.addWidget(self.lasso_body)
+        lsec_body_lay = QVBoxLayout(self.lasso_body)
+        lsec_body_lay.setContentsMargins(0, 0, 0, 0)
+        lsec_body_lay.setSpacing(3)
         lsec_row = QHBoxLayout()
         self.section_draw_btn = QPushButton("Draw (Shift+L)")
         self.section_draw_btn.setIcon(icon("lasso"))
@@ -308,21 +369,24 @@ class SegFixWidget(QWidget):
         self.section_draw_btn.setToolTip(
             "Drag on the canvas to outline the region to keep"
         )
+        self.section_draw_btn.setStyleSheet(
+            "QPushButton:checked { background: #3a5a7a; color: #a8d4ff; "
+            "font-weight: bold; }"
+        )
         self.section_draw_btn.toggled.connect(self.on_toggle_lasso_section)
         lsec_row.addWidget(self.section_draw_btn)
         section_reset_btn = QPushButton("Reset")
         section_reset_btn.setToolTip("Clear the outline — show every point again")
         section_reset_btn.clicked.connect(self._on_lasso_section_reset)
         lsec_row.addWidget(section_reset_btn)
-        lsec.addLayout(lsec_row)
+        lsec_body_lay.addLayout(lsec_row)
         self.lasso_section_label = QLabel()
-        lsec.addWidget(self.lasso_section_label)
+        lsec_body_lay.addWidget(self.lasso_section_label)
         top_bar_row.addWidget(self.lasso_section_box)
         self._lasso_section_mask: np.ndarray | None = None
         self._update_lasso_section_label()
 
         top_bar_row.addStretch()
-        self._update_mode_indicator()  # now that every mode button exists
 
         # -- fixing the current tree ----------------------------------
         sel_box = QGroupBox("Current tree")
@@ -365,9 +429,6 @@ class SegFixWidget(QWidget):
         self.neighbour_row = QHBoxLayout()
         self.neighbour_row.setContentsMargins(0, 0, 0, 0)
         sel.addLayout(self.neighbour_row)
-        self._button(
-            sel, "Hide all neighbours", self.on_hide_neighbours, "hide"
-        )
 
         sel.addWidget(self._subheading("Remove selection from its tree"))
         self._button(sel, "Split off as new tree (N)", self.on_create_new, "new")
@@ -381,7 +442,7 @@ class SegFixWidget(QWidget):
         session.setSpacing(3)
         hist = QHBoxLayout()
         self._button(hist, "Undo (Ctrl+Z)", self.on_undo, "undo")
-        self._button(hist, "Redo", self.on_redo, "redo")
+        self._button(hist, "Redo (Ctrl+Shift+Z)", self.on_redo, "redo")
         session.addLayout(hist)
 
         save = QHBoxLayout()
@@ -422,7 +483,6 @@ class SegFixWidget(QWidget):
             self._uncheck_other_modes(self.lasso_btn)
         else:
             self.move_btn.setChecked(True)
-        self._update_mode_indicator()
 
     def on_toggle_tree_lasso(self, checked: bool) -> None:
         self.c.lasso.set_armed(checked)
@@ -432,7 +492,6 @@ class SegFixWidget(QWidget):
             self._uncheck_other_modes(self.tree_lasso_btn)
         else:
             self.move_btn.setChecked(True)
-        self._update_mode_indicator()
 
     def on_toggle_lasso_section(self, checked: bool) -> None:
         """Arm/disarm the shared lasso tool in "section" mode: a completed
@@ -446,7 +505,6 @@ class SegFixWidget(QWidget):
             self.c.viewer.status = "Lasso section: drag to outline the kept region"
         else:
             self.move_btn.setChecked(True)
-        self._update_mode_indicator()
 
     def _filter_to_current_tree(self, indices: np.ndarray) -> np.ndarray:
         """Keep only the points among ``indices`` already in the current
@@ -471,36 +529,6 @@ class SegFixWidget(QWidget):
         self.tree_lasso_btn.setChecked(False)  # ditto, tree-only lasso
         self.section_draw_btn.setChecked(False)  # ditto, lasso-section drawing
         self.move_btn.setChecked(True)  # stay checked even if already in move
-
-    def _update_mode_indicator(self) -> None:
-        if self.section_draw_btn.isChecked():
-            self.mode_label.setText(
-                "LASSO SECTION — drag outlines the region to keep"
-            )
-            self.mode_label.setStyleSheet(
-                "background: #3a5a7a; color: #a8d4ff;"
-                "border-radius: 3px; padding: 3px; font-weight: bold;"
-            )
-        elif self.tree_lasso_btn.isChecked():
-            self.mode_label.setText(
-                "LASSO (THIS TREE) — drag selects only the current tree's points"
-            )
-            self.mode_label.setStyleSheet(
-                "background: #6a3a7a; color: #e0b3ff;"
-                "border-radius: 3px; padding: 3px; font-weight: bold;"
-            )
-        elif self.c.lasso.armed:
-            self.mode_label.setText("LASSO — drag selects points")
-            self.mode_label.setStyleSheet(
-                "background: #7a6a20; color: #ffe066;"
-                "border-radius: 3px; padding: 3px; font-weight: bold;"
-            )
-        else:
-            self.mode_label.setText("MOVE — drag rotates the view")
-            self.mode_label.setStyleSheet(
-                "background: #2c4a33; color: #9fd8a8;"
-                "border-radius: 3px; padding: 3px; font-weight: bold;"
-            )
 
     def _on_cloud_changed(self) -> None:
         """A new cloud/layer was loaded: reset per-cloud state, re-hook."""
@@ -588,6 +616,7 @@ class SegFixWidget(QWidget):
 
         id_set = {int(t) for t in vals}
         self.hidden_ids &= id_set  # drop ids for trees that no longer exist
+        self.c.faded_ids &= id_set
         self._table_updating = True
         self.tree_table.blockSignals(True)
         self.tree_table.setSortingEnabled(False)
@@ -620,6 +649,16 @@ class SegFixWidget(QWidget):
             hide_item.setCheckState(Qt.Checked if hidden else Qt.Unchecked)
             hide_item.setToolTip("Hide this tree's points in the 3D view")
             self.tree_table.setItem(row, self.HIDE_COL, hide_item)
+            faded = int(tid) in self.c.faded_ids
+            fade_item = QTableWidgetItem()
+            fade_item.setFlags(
+                Qt.ItemIsEnabled | Qt.ItemIsSelectable | Qt.ItemIsUserCheckable
+            )
+            fade_item.setCheckState(Qt.Checked if faded else Qt.Unchecked)
+            fade_item.setToolTip(
+                "Fade this tree — ghosted for context, still selectable"
+            )
+            self.tree_table.setItem(row, self.FADE_COL, fade_item)
             self._style_done_row(row, done)
         self.tree_table.setSortingEnabled(True)
         self.tree_table.blockSignals(False)
@@ -752,6 +791,27 @@ class SegFixWidget(QWidget):
         self._apply_visibility()
         self.c.viewer.status = f"{verb} {len(neighbours)} other tree(s)"
 
+    def on_fade_neighbours(self) -> None:
+        """Toggle fading every other tree currently loaded, so only the tree
+        under review is at full opacity — un-fades them if they're all faded
+        already. Same loaded-set logic as :meth:`on_hide_neighbours`, but the
+        others stay visible and selectable."""
+        if self.current is None:
+            self.c.viewer.status = (
+                "No tree under review — press Space or click a table row"
+            )
+            return
+        neighbours = {int(t) for t in self.c.cloud.tree_ids} - {self.current}
+        if neighbours and neighbours <= self.c.faded_ids:
+            self.c.faded_ids -= neighbours
+            verb = "Restored"
+        else:
+            self.c.faded_ids |= neighbours
+            verb = "Faded"
+        self._refresh_tree_table()  # updates the Fade checkboxes to match
+        self._apply_transparency()
+        self.c.viewer.status = f"{verb} {len(neighbours)} other tree(s)"
+
     def _apply_visibility(self) -> None:
         if self.c.layer is None or not len(self.c.layer.data):
             return
@@ -817,6 +877,7 @@ class SegFixWidget(QWidget):
         return lo + (hi - lo) * (slider_value / self.CROSS_SECTION_STEPS)
 
     def _on_cross_section_toggled(self, checked: bool) -> None:
+        self.cross_body.setVisible(checked)
         self._apply_visibility()
         self.c.viewer.status = (
             "Cross section on — only the slab is shown/selectable"
@@ -878,6 +939,7 @@ class SegFixWidget(QWidget):
         )
 
     def _on_lasso_section_toggled(self, checked: bool) -> None:
+        self.lasso_body.setVisible(checked)
         self._apply_visibility()
         self.c.viewer.status = (
             "Lasso section on — only the outline is shown/selectable"
@@ -920,6 +982,8 @@ class SegFixWidget(QWidget):
             self._mark_done(tid, item.checkState() == Qt.Checked)
         elif item.column() == self.HIDE_COL:
             self._set_hidden(tid, item.checkState() == Qt.Checked)
+        elif item.column() == self.FADE_COL:
+            self._set_faded(tid, item.checkState() == Qt.Checked)
 
     def _set_hidden(self, tid: int, hidden: bool) -> None:
         if hidden:
@@ -928,6 +992,24 @@ class SegFixWidget(QWidget):
             self.hidden_ids.discard(tid)
         self._apply_visibility()
         self.c.viewer.status = f"Tree {tid} {'hidden' if hidden else 'shown'}"
+
+    def _set_faded(self, tid: int, faded: bool) -> None:
+        if faded:
+            self.c.faded_ids.add(tid)
+        else:
+            self.c.faded_ids.discard(tid)
+        self._apply_transparency()
+        self.c.viewer.status = (
+            f"Tree {tid} {'faded' if faded else 'back to full opacity'}"
+        )
+
+    def _apply_transparency(self) -> None:
+        """Re-colour the layer so trees in ``faded_ids`` render at
+        FADED_ALPHA. Parallel to _apply_visibility, but for opacity — faded
+        points stay shown and selectable."""
+        if self.c.layer is None or not len(self.c.layer.data):
+            return
+        refresh_layer(self.c.layer, self.c.cloud, self.c.faded_ids)
 
     def _mark_done(self, tid: int, done: bool) -> None:
         if done:

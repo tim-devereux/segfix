@@ -96,14 +96,17 @@ Two tables stack in the right-hand panel. **All Trees** (top) lists every tree
 in the file, with a `✓` once it has been reviewed — **double-click a row** to
 load that tree plus its spatial neighbours into the 3D view. **Selected Tree +
 Neighbours** (below) is the review queue for what's currently loaded: a Done
-checkbox per tree, a 👁 column to hide one from the view, and the Prev / Done
-buttons. Both read the same `<cloud>.segfix.json` sidecar, written next to the
-working copy, so a half-finished plot resumes where you left off.
+checkbox per tree, a 👁 column to hide one from the view, a **Fade** column to
+ghost one (still shown, still selectable), and the Prev / Done buttons. Both
+read the same `<cloud>.segfix.json` sidecar, written next to the working copy,
+so a half-finished plot resumes where you left off.
 
 1. Double-click a tree in **All Trees**. The camera flies to it and a
-   wireframe box marks it. To declutter a crowded view, use the 👁 column in
-   the lower table (or **Hide all neighbours** in the Current tree panel) to
-   hide specific or all neighbouring trees.
+   wireframe box marks it. To declutter a crowded view, use the 👁 (hide) or
+   **Fade** column in the lower table on specific trees — or **Hide others** /
+   **Fade others** in the top-bar **View** group to do it to every loaded tree
+   except the one under review. Fading keeps a tree visible as faint context
+   and still lets the lasso grab its points; hiding removes it from both.
 2. Inspect it. If it's correct, press **Space** — the tree is marked done,
    progress is saved, and the next unfinished tree in the loaded set becomes
    current. That's the loop.

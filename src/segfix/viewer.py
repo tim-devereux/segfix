@@ -73,6 +73,10 @@ def add_gpu_status_widget(viewer) -> None:
 UNASSIGNED_COLOR = np.array([0.4, 0.41, 0.43, 1.0], dtype=np.float32)
 NOISE_COLOR = np.array([0.25, 0.25, 0.27, 1.0], dtype=np.float32)
 
+# Opacity for trees the panel has "faded": ghosted for context but, unlike a
+# hidden tree, still rendered and still selectable by the lasso.
+FADED_ALPHA = 0.32
+
 
 def _hsv_to_rgb(h: np.ndarray, s: float, v: float) -> np.ndarray:
     """Vectorised HSV→RGB for hue array ``h`` in [0, 1)."""
@@ -102,13 +106,17 @@ def _boost(rgb: tuple) -> tuple:
     return colorsys.hsv_to_rgb(h, max(s, 0.55), max(v, 0.85))
 
 
-def colors_for_labels(labels: np.ndarray, label_colors=None) -> np.ndarray:
+def colors_for_labels(labels: np.ndarray, label_colors=None, faded=None) -> np.ndarray:
     """Return an ``(N, 4)`` RGBA array colouring points by their tree ID.
 
     When ``label_colors`` is given (e.g. an RGB-segmented source), each label
     keeps its original hue (brightened for the dark canvas); labels without
     an entry fall back to a hashed hue.  Without ``label_colors`` everything
     is hashed.  UNASSIGNED and NOISE always get fixed muted greys.
+
+    ``faded`` is an optional iterable of tree IDs whose points get
+    :data:`FADED_ALPHA` in place of full opacity — the panel's per-tree "fade"
+    control (see :meth:`SegFixWidget._set_faded`).
     """
     labels = np.asarray(labels)
     colors = np.empty((len(labels), 4), dtype=np.float32)
@@ -137,6 +145,11 @@ def colors_for_labels(labels: np.ndarray, label_colors=None) -> np.ndarray:
         pos = np.searchsorted(uniq, ids)
         colors[is_tree, :3] = per_label[pos]
         colors[is_tree, 3] = 1.0
+
+    if faded is not None:
+        faded = list(faded)
+        if faded:
+            colors[np.isin(labels, faded), 3] = FADED_ALPHA
     return colors
 
 
@@ -215,17 +228,19 @@ def _patch_napari_shown_in_full_3d() -> None:
     _shown_patch_applied = True
 
 
-def add_cloud_layer(viewer, cloud: PointCloud, point_size: float = 0.01):
+def add_cloud_layer(viewer, cloud: PointCloud, point_size: float = 0.01,
+                    faded=None):
     """Add the point cloud to a napari viewer as a coloured Points layer.
 
     ``point_size`` is in data units (metres); 1 cm suits fine LiDAR. Adjust it
     live with the segfix panel's "Point size" spinner, or override here.
+    ``faded`` is passed straight to :func:`colors_for_labels`.
     """
     _patch_napari_shown_in_full_3d()
     # napari chokes on an empty face_color array, so colour an empty cloud with
     # a plain default; real colours are applied as soon as points are loaded.
     face_color = (
-        colors_for_labels(cloud.labels, cloud.label_colors)
+        colors_for_labels(cloud.labels, cloud.label_colors, faded)
         if cloud.n_points
         else "gray"
     )
@@ -358,8 +373,12 @@ def apply_cloudcompare_controls(viewer) -> None:
         cam.viewbox_mouse_event = handler
 
 
-def refresh_layer(layer, cloud: PointCloud) -> None:
-    """Re-apply colours/features after the labels have changed."""
+def refresh_layer(layer, cloud: PointCloud, faded=None) -> None:
+    """Re-apply colours/features after the labels have changed.
+
+    ``faded`` (an iterable of tree IDs) keeps those trees ghosted through the
+    refresh, so an edit doesn't silently un-fade them.
+    """
     layer.features = {cloud.label_field: cloud.labels.copy()}
-    layer.face_color = colors_for_labels(cloud.labels, cloud.label_colors)
+    layer.face_color = colors_for_labels(cloud.labels, cloud.label_colors, faded)
     layer.refresh()

@@ -46,6 +46,22 @@ def test_no_op_records_no_undo():
     assert not c.can_undo
 
 
+def test_colors_for_labels_fades_only_requested_trees():
+    from segfix.viewer import FADED_ALPHA, colors_for_labels
+
+    labels = np.array([UNASSIGNED, NOISE, 1, 1, 2, 3])
+    rgba = colors_for_labels(labels, faded={1, 3})
+
+    assert list(rgba[:, 3]) == pytest.approx(
+        [1.0, 1.0, FADED_ALPHA, FADED_ALPHA, 1.0, FADED_ALPHA]
+    )
+    # colour (RGB) is unchanged by fading — only alpha moves.
+    assert (colors_for_labels(labels)[:, :3] == rgba[:, :3]).all()
+    # no faded set (or an empty one) => everything opaque.
+    assert (colors_for_labels(labels, faded=set())[:, 3] == 1.0).all()
+    assert (colors_for_labels(labels)[:, 3] == 1.0).all()
+
+
 def test_points_in_polygon_square():
     # unit square polygon
     poly = np.array([[0, 0], [10, 0], [10, 10], [0, 10]], dtype=float)

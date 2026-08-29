@@ -177,6 +177,13 @@ def _hide(p: QPainter) -> None:
     p.drawLine(QPointF(7, 27), QPointF(25, 5))
 
 
+def _fade(p: QPainter) -> None:
+    """Faint dashed eye: fade points (still there, still selectable)."""
+    p.setPen(_pen(dashed=True))
+    p.drawEllipse(QRectF(5, 10, 22, 12))
+    p.drawEllipse(QRectF(13, 13, 6, 6))
+
+
 def _move(p: QPainter) -> None:
     """Four-way arrows: camera/movement mode."""
     p.drawLine(QPointF(16, 9), QPointF(16, 23))
@@ -193,10 +200,18 @@ def _next(p: QPainter) -> None:
     p.drawLine(QPointF(27, 8), QPointF(27, 24))
 
 
+def _prev(p: QPainter) -> None:
+    p.drawLine(QPointF(28, 16), QPointF(14, 16))
+    _arrowhead(p, (9, 16), (16, 10), (16, 22))
+    p.drawLine(QPointF(5, 8), QPointF(5, 24))
+
+
 _DRAW = {
     "hide": _hide,
+    "fade": _fade,
     "move": _move,
     "lasso": _lasso,
+    "prev": _prev,
     "target": _target,
     "reassign": _reassign,
     "new": _new_tree,

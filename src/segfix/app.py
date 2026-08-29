@@ -220,7 +220,13 @@ def _run_scene(napari, args) -> int:
     from .model import PointCloud
     from .scene_ui import SceneController, SceneWidget
     from .treecatalog import open_catalog
-    from .viewer import add_cloud_layer, apply_cloudcompare_controls, busy, strip_ui
+    from .viewer import (
+        add_cloud_layer,
+        add_gpu_status_widget,
+        apply_cloudcompare_controls,
+        busy,
+        strip_ui,
+    )
     from .widgets import SegFixController, SegFixWidget, bind_shortcuts
 
     viewer = napari.Viewer(title=f"segfix — {args.cloud}")
@@ -244,6 +250,9 @@ def _run_scene(napari, args) -> int:
         coords=np.empty((0, 3), np.float32), labels=np.empty(0, np.int32)
     )
     layer = add_cloud_layer(viewer, empty, point_size=args.point_size)
+    # After the first layer add, so the GL context exists to read a renderer
+    # string from (see gpu_renderer_info).
+    add_gpu_status_widget(viewer)
     busy(viewer, f"Scanning trees in {args.cloud}…")
 
     catalog = open_catalog(args.cloud, label_field=args.label_field)
