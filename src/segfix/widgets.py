@@ -18,6 +18,7 @@ from qtpy.QtCore import QSize, Qt
 from qtpy.QtGui import QBrush, QColor, QPixmap
 from qtpy.QtWidgets import (
     QAbstractItemView,
+    QCheckBox,
     QComboBox,
     QDoubleSpinBox,
     QGroupBox,
@@ -198,10 +199,12 @@ class SegFixWidget(QWidget):
 
         layout.addWidget(self.trees_box)
 
-        # Interaction / View / Cross section live in a separate horizontal
-        # bar (docked at the top of the window by app.py, not stacked in
-        # this side panel) — they're about the canvas/viewport, not the
-        # tree-review workflow the rest of this panel is organised around.
+        # Interaction / View / the two section tools live in a separate
+        # horizontal bar (docked at the top of the window by app.py, not
+        # stacked in this side panel) — they're about the canvas/viewport,
+        # not the tree-review workflow the rest of this panel is organised
+        # around. Each section box shows its controls at a constant size with
+        # its on/off toggle inside, so switching one never resizes the bar.
         self.top_bar = QWidget()
         top_bar_row = QHBoxLayout(self.top_bar)
         top_bar_row.setContentsMargins(0, 0, 0, 0)
@@ -296,25 +299,26 @@ class SegFixWidget(QWidget):
 
         # -- cross section: an interactive slab along one axis; while on,
         # only points inside it are shown and selectable (folded into the
-        # same layer.shown mechanism as the per-tree hide checkboxes) -----
+        # same layer.shown mechanism as the per-tree hide checkboxes).
+        # The box in the bar stays tiny and fixed — just the On toggle and a
+        # "Slab…" button; the axis/extent controls live in a floating popover
+        # so switching or adjusting the tool never resizes or crowds the bar.
         self.cross_box = QGroupBox("Cross section (C)")
-        self.cross_box.setCheckable(True)
-        self.cross_box.setChecked(False)
-        self.cross_box.setToolTip(
-            "Slice the cloud to a slab along one axis. While enabled, only "
-            "points inside the slab are shown or selectable."
-        )
-        self.cross_box.toggled.connect(self._on_cross_section_toggled)
-        cross = QVBoxLayout(self.cross_box)
+        cross = QHBoxLayout(self.cross_box)
         cross.setContentsMargins(6, 2, 6, 4)
-        # Body collapses to nothing until the tool is switched on, so an idle
-        # Cross section is just its title-bar checkbox in the top strip.
-        self.cross_body = QWidget()
-        self.cross_body.setVisible(False)
-        cross.addWidget(self.cross_body)
-        cross_body_lay = QVBoxLayout(self.cross_body)
-        cross_body_lay.setContentsMargins(0, 0, 0, 0)
-        cross_body_lay.setSpacing(3)
+        self.cross_enable = QCheckBox("On")
+        self.cross_enable.setToolTip(
+            "Slice the cloud to a slab along one axis. While on, only points "
+            "inside the slab are shown or selectable."
+        )
+        self.cross_enable.toggled.connect(self._on_cross_section_toggled)
+        cross.addWidget(self.cross_enable)
+        slab_btn = QPushButton("Slab…")
+        slab_btn.setToolTip("Axis and slab extent")
+        cross.addWidget(slab_btn)
+
+        self._cross_popover = QWidget(self, Qt.Popup)
+        cp = QVBoxLayout(self._cross_popover)
         cross_top = QHBoxLayout()
         cross_top.addWidget(QLabel("Axis"))
         self.cross_axis_combo = QComboBox()
@@ -328,17 +332,22 @@ class SegFixWidget(QWidget):
         cross_top.addWidget(reset_btn)
         self.cross_range_label = QLabel()
         cross_top.addWidget(self.cross_range_label, stretch=1)
-        cross_body_lay.addLayout(cross_top)
+        cp.addLayout(cross_top)
         slab_row = QHBoxLayout()
         slab_row.addWidget(QLabel("Min"))
         self.cross_min_slider = QSlider(Qt.Horizontal)
+        self.cross_min_slider.setMinimumWidth(160)
         self.cross_min_slider.valueChanged.connect(self._on_cross_range_changed)
         slab_row.addWidget(self.cross_min_slider)
         slab_row.addWidget(QLabel("Max"))
         self.cross_max_slider = QSlider(Qt.Horizontal)
+        self.cross_max_slider.setMinimumWidth(160)
         self.cross_max_slider.valueChanged.connect(self._on_cross_range_changed)
         slab_row.addWidget(self.cross_max_slider)
-        cross_body_lay.addLayout(slab_row)
+        cp.addLayout(slab_row)
+        slab_btn.clicked.connect(
+            lambda: self._toggle_popover(self._cross_popover, slab_btn)
+        )
         top_bar_row.addWidget(self.cross_box)
         self._cross_lo, self._cross_hi = 0.0, 1.0
         self._reset_cross_section_range()
@@ -349,24 +358,18 @@ class SegFixWidget(QWidget):
         # SegFixController.on_lasso_section); the outline it produces is
         # a one-shot boolean mask, not a live screen region, so it stays
         # put as the camera moves — same persistence model as the slab.
+        # No sliders here, so it fits inline; the kept-count goes to the box
+        # tooltip and the status bar rather than a width-hungry label.
         self.lasso_section_box = QGroupBox("Lasso section (Shift+C)")
-        self.lasso_section_box.setCheckable(True)
-        self.lasso_section_box.setChecked(False)
-        self.lasso_section_box.setToolTip(
-            "Keep only points inside a hand-drawn outline. Like cross "
-            "section, but the kept region is whatever shape you draw "
-            "instead of a slab along one axis."
-        )
-        self.lasso_section_box.toggled.connect(self._on_lasso_section_toggled)
-        lsec = QVBoxLayout(self.lasso_section_box)
+        lsec = QHBoxLayout(self.lasso_section_box)
         lsec.setContentsMargins(6, 2, 6, 4)
-        self.lasso_body = QWidget()  # collapses until the tool is on
-        self.lasso_body.setVisible(False)
-        lsec.addWidget(self.lasso_body)
-        lsec_body_lay = QVBoxLayout(self.lasso_body)
-        lsec_body_lay.setContentsMargins(0, 0, 0, 0)
-        lsec_body_lay.setSpacing(3)
-        lsec_row = QHBoxLayout()
+        self.lasso_section_enable = QCheckBox("On")
+        self.lasso_section_enable.setToolTip(
+            "Keep only points inside a hand-drawn outline. Like cross section, "
+            "but the kept region is whatever shape you draw."
+        )
+        self.lasso_section_enable.toggled.connect(self._on_lasso_section_toggled)
+        lsec.addWidget(self.lasso_section_enable)
         self.section_draw_btn = QPushButton("Draw (Shift+L)")
         self.section_draw_btn.setIcon(icon("lasso"))
         self.section_draw_btn.setIconSize(QSize(18, 18))
@@ -379,14 +382,13 @@ class SegFixWidget(QWidget):
             "font-weight: bold; }"
         )
         self.section_draw_btn.toggled.connect(self.on_toggle_lasso_section)
-        lsec_row.addWidget(self.section_draw_btn)
+        lsec.addWidget(self.section_draw_btn)
         section_reset_btn = QPushButton("Reset")
         section_reset_btn.setToolTip("Clear the outline — show every point again")
         section_reset_btn.clicked.connect(self._on_lasso_section_reset)
-        lsec_row.addWidget(section_reset_btn)
-        lsec_body_lay.addLayout(lsec_row)
-        self.lasso_section_label = QLabel()
-        lsec_body_lay.addWidget(self.lasso_section_label)
+        lsec.addWidget(section_reset_btn)
+        self.lasso_section_label = QLabel(self)  # not shown; feeds the tooltip
+        self.lasso_section_label.hide()
         top_bar_row.addWidget(self.lasso_section_box)
         self._lasso_section_mask: np.ndarray | None = None
         self._update_lasso_section_label()
@@ -467,6 +469,16 @@ class SegFixWidget(QWidget):
         btn.clicked.connect(slot)
         parent_layout.addWidget(btn)
 
+    def _toggle_popover(self, popover: QWidget, anchor) -> None:
+        """Show/hide a ``Qt.Popup`` widget just under ``anchor`` — a floating
+        detail panel that costs the toolbar no layout space."""
+        if popover.isVisible():
+            popover.hide()
+            return
+        popover.adjustSize()
+        popover.move(anchor.mapToGlobal(anchor.rect().bottomLeft()))
+        popover.show()
+
     def _subheading(self, text: str) -> QLabel:
         """A small bold label dividing a group box into sub-sections,
         lighter-weight than nesting another QGroupBox."""
@@ -541,12 +553,12 @@ class SegFixWidget(QWidget):
         self.hidden_ids = set()
         # A slab computed for the previous cloud's coordinate space doesn't
         # carry over; turn the tool off and recompute its range for this one.
-        self.cross_box.setChecked(False)
+        self.cross_enable.setChecked(False)
         self._reset_cross_section_range()
         # Same for a lasso section: its mask is indices into the *previous*
         # cloud's points array, meaningless for a new one.
         self._lasso_section_mask = None
-        self.lasso_section_box.setChecked(False)
+        self.lasso_section_enable.setChecked(False)
         self._update_lasso_section_label()
         self._load_progress()  # done-tree set lives beside the source file
         self._on_point_size(self.size_spin.value())  # size persists across loads
@@ -882,7 +894,6 @@ class SegFixWidget(QWidget):
         return lo + (hi - lo) * (slider_value / self.CROSS_SECTION_STEPS)
 
     def _on_cross_section_toggled(self, checked: bool) -> None:
-        self.cross_body.setVisible(checked)
         self._apply_visibility()
         self.c.viewer.status = (
             "Cross section on — only the slab is shown/selectable"
@@ -917,7 +928,7 @@ class SegFixWidget(QWidget):
 
     def _cross_section_mask(self) -> np.ndarray | None:
         """Per-point mask, True inside the current slab; None when off."""
-        if not self.cross_box.isChecked() or not len(self.c.cloud.coords):
+        if not self.cross_enable.isChecked() or not len(self.c.cloud.coords):
             return None
         axis = self.cross_axis_combo.currentIndex()
         lo = self._slider_to_value(self.cross_min_slider.value())
@@ -934,9 +945,9 @@ class SegFixWidget(QWidget):
         mask = np.zeros(n, dtype=bool)
         mask[indices] = True
         self._lasso_section_mask = mask
-        self.lasso_section_box.blockSignals(True)
-        self.lasso_section_box.setChecked(True)
-        self.lasso_section_box.blockSignals(False)
+        self.lasso_section_enable.blockSignals(True)
+        self.lasso_section_enable.setChecked(True)
+        self.lasso_section_enable.blockSignals(False)
         self._update_lasso_section_label()
         self._apply_visibility()
         self.c.viewer.status = (
@@ -944,7 +955,6 @@ class SegFixWidget(QWidget):
         )
 
     def _on_lasso_section_toggled(self, checked: bool) -> None:
-        self.lasso_body.setVisible(checked)
         self._apply_visibility()
         self.c.viewer.status = (
             "Lasso section on — only the outline is shown/selectable"
@@ -953,26 +963,28 @@ class SegFixWidget(QWidget):
 
     def _on_lasso_section_reset(self) -> None:
         self._lasso_section_mask = None
-        self.lasso_section_box.setChecked(False)
+        self.lasso_section_enable.setChecked(False)
         self._update_lasso_section_label()
         self._apply_visibility()
         self.c.viewer.status = "Lasso section cleared"
 
     def _update_lasso_section_label(self) -> None:
         mask = self._lasso_section_mask
-        if mask is None:
-            self.lasso_section_label.setText("No outline drawn")
-        else:
-            self.lasso_section_label.setText(
-                f"{int(mask.sum()):,} / {len(mask):,} points kept"
-            )
+        text = (
+            "No outline drawn" if mask is None
+            else f"{int(mask.sum()):,} / {len(mask):,} points kept"
+        )
+        self.lasso_section_label.setText(text)
+        self.lasso_section_box.setToolTip(
+            "Keep only points inside a hand-drawn outline.\n" + text
+        )
 
     def _lasso_section_mask_active(self) -> np.ndarray | None:
         """The drawn mask, if the section is on and it still matches the
         currently loaded cloud (a new cloud invalidates it — see
         _on_cloud_changed); None otherwise, meaning no restriction."""
         mask = self._lasso_section_mask
-        if not self.lasso_section_box.isChecked() or mask is None:
+        if not self.lasso_section_enable.isChecked() or mask is None:
             return None
         if len(mask) != len(self.c.cloud.coords):
             return None
@@ -1331,11 +1343,9 @@ def bind_shortcuts(viewer, panel: SegFixWidget) -> None:
         "u": lambda v: panel.on_unassign(),
         "x": lambda v: panel.on_noise(),
         "h": lambda v: panel.show_unassigned.toggle(),
-        "c": lambda v: panel.cross_box.setChecked(not panel.cross_box.isChecked()),
+        "c": lambda v: panel.cross_enable.toggle(),
         "Shift-l": lambda v: panel.section_draw_btn.toggle(),
-        "Shift-c": lambda v: panel.lasso_section_box.setChecked(
-            not panel.lasso_section_box.isChecked()
-        ),
+        "Shift-c": lambda v: panel.lasso_section_enable.toggle(),
         "Control-z": lambda v: panel.on_undo(),
         "Control-Shift-z": lambda v: panel.on_redo(),
         "Control-s": lambda v: panel.on_save(),
