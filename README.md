@@ -56,22 +56,6 @@ of one tree, and on save patch only the label bytes that changed. ASCII PLY has
 variable-length records with no stride to index by, so it is refused at load
 with an explanation rather than half-working.
 
-### arbor output
-
-[arbor](https://github.com/r-lidar/arbor)'s pipeline (`arbor segment …`) writes
-`<plot>_output/<plot>_segmented.laz` — a point cloud with a per-point `treeID`
-Extra-Bytes column (`0` = unassigned). Import that `.laz` directly: segfix
-decompresses it to a `.las` working copy in the project folder (the original
-`.laz` is never touched), you fix the `treeID`s with the workflow below, and
-**Save** patches the `.las` in place *and* re-compresses a fresh `.laz` beside
-it for arbor to re-read.
-
-One caveat: if a cloud's `treeID` column is an *unsigned* type, points you
-dismiss as noise (`X`) are written back as `0` (unassigned) — segfix's own
-`.segfix.json` sidecar still remembers they were noise, but a reader of the LAS
-alone cannot tell noise from unassigned. (arbor writes a signed `treeID`, so
-this does not apply to its output.)
-
 ### raycloudtools output
 
 [raycloudtools](https://github.com/csiro-robotics/raycloudtools)' `rayextract
@@ -87,6 +71,22 @@ so once such a file is reloaded the two are indistinguishable (segfix's
 `.segfix.json` sidecar still remembers which were noise for the current
 project). New trees created during editing (`N`, splits) get a deterministic
 colour derived from their id.
+
+### arbor output
+
+[arbor](https://github.com/r-lidar/arbor)'s pipeline (`arbor segment …`) writes
+`<plot>_output/<plot>_segmented.laz` — a point cloud with a per-point `treeID`
+Extra-Bytes column (`0` = unassigned). Import that `.laz` directly: segfix
+decompresses it to a `.las` working copy in the project folder (the original
+`.laz` is never touched), you fix the `treeID`s with the workflow below, and
+**Save** patches the `.las` in place *and* re-compresses a fresh `.laz` beside
+it for arbor to re-read.
+
+One caveat: if a cloud's `treeID` column is an *unsigned* type, points you
+dismiss as noise (`X`) are written back as `0` (unassigned) — segfix's own
+`.segfix.json` sidecar still remembers they were noise, but a reader of the LAS
+alone cannot tell noise from unassigned. (arbor writes a signed `treeID`, so
+this does not apply to its output.)
 
 ## Editing workflow
 
