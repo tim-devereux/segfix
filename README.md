@@ -52,9 +52,7 @@ The per-point tree ID field is auto-detected (`treeID`, `PredInstance`,
 **Binary PLY** — RGB-segmented (raycloudtools) or with a label field — and
 **LAS**. Both store their points as fixed-size records at a known offset, which
 is what lets `treecatalog.py` memory-map a whole plot, read back just the points
-of one tree, and on save patch only the label bytes that changed. ASCII PLY has
-variable-length records with no stride to index by, so it is refused at load
-with an explanation rather than half-working.
+of one tree, and on save patch only the label bytes that changed.
 
 ### raycloudtools output
 
