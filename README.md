@@ -3,7 +3,7 @@
 A GUI tool to **fix the instance segmentation of tree point clouds**. Load a
 segmented LiDAR cloud, see each tree in its own colour, and correct mistakes by
 lassoing points and reassigning, splitting off, or dismissing them — then save
-back to the PLY you started from.
+back to a corrected version of the input, retaining all fields.
 
 Built on [napari](https://napari.org) for fast 3D rendering and point selection.
 
