@@ -7,7 +7,7 @@ back to a corrected version of the input, retaining all fields.
 
 Built on [napari](https://napari.org) for fast 3D rendering and point selection.
 
-<img width="1920" height="1013" alt="image" src="https://github.com/user-attachments/assets/dc454e6e-93ad-45f9-aa20-a61d225c0a94" />
+![segfix reviewing a segmented plot](https://github.com/user-attachments/assets/dc454e6e-93ad-45f9-aa20-a61d225c0a94)
 
 ## Contributing
 
