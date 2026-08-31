@@ -33,14 +33,14 @@ python scripts/make_sample.py sample.ply
 python scripts/make_sample.py --format las sample.las   # arbor-shaped LAS
 ```
 
-`segfix` always opens a startup dialog — there is no path argument. Double-click
+`segfix` will open a startup dialog. Double-click
 a recent project to reopen it, or click **New Project…** to import a point cloud
 file. Importing copies the file into a new project folder (created inside the
 directory you pick, named after the source file) and opens that copy — edits are
 always saved to the copy, never the original source file.
 
 Every project opened this way is recorded in `~/.config/segfix/registry.json`
-(a plain JSON file, not a database) so it shows up in the "Recent projects"
+(a plain JSON file) so it shows up in the "Recent projects"
 list next time — most-recently-opened at the top and preselected, each row
 showing how long ago it was last opened.
 
