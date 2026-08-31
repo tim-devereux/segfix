@@ -189,7 +189,11 @@ def _dock_right(viewer, widget):
     from qtpy.QtCore import Qt
     from qtpy.QtWidgets import QSizePolicy
 
-    dock = viewer.window.add_dock_widget(widget, name="segfix", area="right")
+    from . import __version__
+
+    dock = viewer.window.add_dock_widget(
+        widget, name=f"segfix {__version__}", area="right"
+    )
     policy = dock.widget().sizePolicy()
     policy.setVerticalPolicy(QSizePolicy.Policy.Expanding)
     dock.widget().setSizePolicy(policy)
