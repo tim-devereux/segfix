@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=64"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -8,6 +8,19 @@ version = "0.1.0"
 description = "GUI tool to fix instance segmentation of tree point clouds"
 readme = "README.md"
 requires-python = ">=3.10,<3.13"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{name = "Tim Devereux", email = "devereux.tj@gmail.com"}]
+keywords = ["lidar", "point-cloud", "segmentation", "forestry", "napari"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: X11 Applications :: Qt",
+    "Intended Audience :: Science/Research",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Visualization",
+]
 dependencies = [
     # >=0.9: viewer._patch_napari_shown_in_full_3d reads _PointSliceRequest.shown,
     # a field 0.8 does not have (and whose response kwarg 0.8 spells differently),
@@ -22,6 +35,10 @@ dependencies = [
     # lazrs is the LAZ backend (laszip works too if that's what's installed).
     "laspy[lazrs]>=2.5",
 ]
+
+[project.urls]
+Homepage = "https://github.com/tim-devereux/segfix"
+Issues = "https://github.com/tim-devereux/segfix/issues"
 
 [project.optional-dependencies]
 dev = ["pytest>=7.0"]
