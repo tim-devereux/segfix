@@ -12,15 +12,31 @@ Built on [napari](https://napari.org) for fast 3D rendering and point selection.
 ## Contributing
 
 Feedback, issues, and PRs all welcome. For issues please use [GitHub issues](https://github.com/tim-devereux/segfix/issues) (not a personal message) so the community can benefit.
+
 ## Install
 
 Requires Python 3.10–3.12 (napari/Qt do not yet ship wheels for 3.13+).
 
 ```bash
-git clone https://github.com/tim-devereux/segfix.git
-cd segfix
+pip install segfix
+```
+
+napari and Qt are large; a dedicated environment keeps them out of your base
+install:
+
+```bash
 conda create -n segfix python=3.11
 conda activate segfix
+pip install segfix
+```
+
+### From source
+
+For development, or to get `scripts/make_sample.py`:
+
+```bash
+git clone https://github.com/tim-devereux/segfix.git
+cd segfix
 pip install -e .
 ```
 
@@ -28,7 +44,12 @@ pip install -e .
 
 ```bash
 segfix
-# or generate a practice cloud with built-in segmentation errors first:
+```
+
+From a source checkout you can generate a practice cloud with built-in
+segmentation errors first:
+
+```bash
 python scripts/make_sample.py sample.ply
 python scripts/make_sample.py --format las sample.las   # arbor-shaped LAS
 ```
