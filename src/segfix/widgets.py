@@ -14,8 +14,8 @@ import json
 import os
 
 import numpy as np
-from qtpy.QtCore import QSize, Qt
-from qtpy.QtGui import QBrush, QColor, QPixmap
+from qtpy.QtCore import QPoint, QRect, QSize, Qt
+from qtpy.QtGui import QBrush, QColor, QIcon, QPixmap
 from qtpy.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
@@ -25,6 +25,7 @@ from qtpy.QtWidgets import (
     QHBoxLayout,
     QHeaderView,
     QLabel,
+    QLayout,
     QMessageBox,
     QPushButton,
     QSlider,
@@ -44,6 +45,81 @@ from .viewer import (
     refresh_view,
     visibility_mask,
 )
+
+
+class _FlowLayout(QLayout):
+    """Left-to-right layout that wraps onto a new line when it runs out of
+    width, like text. Used for the "send selection to neighbour" buttons:
+    there can be a dozen-plus of them and the side panel is narrow, so a
+    plain QHBoxLayout would squash or clip them. Standard Qt FlowLayout port.
+    """
+
+    def __init__(self, parent=None, margin=0, spacing=4):
+        super().__init__(parent)
+        if parent is not None:
+            self.setContentsMargins(margin, margin, margin, margin)
+        self.setSpacing(spacing)
+        self._items: list = []
+
+    def __del__(self):
+        while self._items:
+            self._items.pop()
+
+    def addItem(self, item):  # noqa: N802 (Qt override)
+        self._items.append(item)
+
+    def count(self):
+        return len(self._items)
+
+    def itemAt(self, i):  # noqa: N802
+        return self._items[i] if 0 <= i < len(self._items) else None
+
+    def takeAt(self, i):  # noqa: N802
+        return self._items.pop(i) if 0 <= i < len(self._items) else None
+
+    def expandingDirections(self):  # noqa: N802
+        return Qt.Orientation(0)
+
+    def hasHeightForWidth(self):  # noqa: N802
+        return True
+
+    def heightForWidth(self, width):  # noqa: N802
+        return self._do_layout(QRect(0, 0, width, 0), apply=False)
+
+    def setGeometry(self, rect):  # noqa: N802
+        super().setGeometry(rect)
+        self._do_layout(rect, apply=True)
+
+    def sizeHint(self):  # noqa: N802
+        return self.minimumSize()
+
+    def minimumSize(self):  # noqa: N802
+        size = QSize()
+        for item in self._items:
+            size = size.expandedTo(item.minimumSize())
+        m = self.contentsMargins()
+        return size + QSize(m.left() + m.right(), m.top() + m.bottom())
+
+    def _do_layout(self, rect, apply):
+        m = self.contentsMargins()
+        x = rect.x() + m.left()
+        y = rect.y() + m.top()
+        right = rect.right() - m.right()
+        line_height = 0
+        space = self.spacing()
+        for item in self._items:
+            hint = item.sizeHint()
+            next_x = x + hint.width()
+            if next_x - space > right and line_height > 0:
+                x = rect.x() + m.left()
+                y = y + line_height + space
+                next_x = x + hint.width()
+                line_height = 0
+            if apply:
+                item.setGeometry(QRect(QPoint(x, y), hint))
+            x = next_x + space
+            line_height = max(line_height, hint.height())
+        return y + line_height - rect.y() + m.bottom()
 
 
 class SegFixController:
@@ -430,8 +506,9 @@ class SegFixWidget(QWidget):
         self.focus_margin.valueChanged.connect(self._update_neighbour_picker)
         neighbour_header.addWidget(self.focus_margin)
         sel.addLayout(neighbour_header)
-        self.neighbour_row = QHBoxLayout()
-        self.neighbour_row.setContentsMargins(0, 0, 0, 0)
+        # Flow, not QHBox: with several neighbours the buttons would be
+        # squashed or clipped in this narrow panel, so let them wrap.
+        self.neighbour_row = _FlowLayout(margin=0, spacing=4)
         sel.addLayout(self.neighbour_row)
 
         sel.addWidget(self._subheading("Remove selection from its tree"))
@@ -1151,14 +1228,20 @@ class SegFixWidget(QWidget):
                 np.array([nid]), self.c.cloud.label_colors
             )[0]
             r, g, b = (int(v * 255) for v in rgba[:3])
-            btn = QPushButton(f"→ {nid}")
-            btn.setStyleSheet(f"border-left: 4px solid rgb({r},{g},{b});")
+            btn = QPushButton(f"  {nid}")
+            swatch = QPixmap(12, 12)
+            swatch.fill(QColor(r, g, b))
+            btn.setIcon(QIcon(swatch))
+            btn.setIconSize(QSize(12, 12))
+            btn.setStyleSheet(
+                f"QPushButton {{ border: 2px solid rgb({r},{g},{b}); "
+                "border-radius: 3px; padding: 2px 6px; }"
+            )
             btn.setToolTip(f"Move the current selection to tree {nid}")
             btn.clicked.connect(
                 lambda _checked=False, n=nid: self.on_send_to_neighbour(n)
             )
             self.neighbour_row.addWidget(btn)
-        self.neighbour_row.addStretch()
 
     def _require_selection(self) -> np.ndarray | None:
         idx = self.c.selected_indices()
