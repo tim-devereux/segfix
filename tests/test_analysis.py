@@ -44,3 +44,42 @@ def test_neighbours_by_points_respects_reach():
     )
     assert analysis.neighbours_by_points(cloud, 1, reach=1.0) == set()
     assert analysis.neighbours_by_points(cloud, 1, reach=2.0) == {2}
+
+
+def test_cluster_from_seed_grows_one_connected_blob():
+    """Two dense blobs with a wide empty gap: a region grow from a seed in
+    one must stay inside it."""
+    rng = np.random.default_rng(0)
+    a = rng.normal((0, 0, 0), 0.05, (4000, 3))
+    b = rng.normal((5, 0, 0), 0.05, (4000, 3))
+    coords = np.vstack([a, b]).astype(np.float32)
+    tree, eps = analysis.build_cluster_index(coords)
+
+    got_a = analysis.cluster_from_seed(coords, 0, eps, kdtree=tree)
+    assert (got_a < 4000).all()
+    assert len(got_a) > 3500  # nearly the whole blob is connected
+
+    got_b = analysis.cluster_from_seed(coords, 5000, eps, kdtree=tree)
+    assert (got_b >= 4000).all()
+
+
+def test_cluster_from_seed_respects_mask_and_cap():
+    rng = np.random.default_rng(1)
+    coords = rng.normal((0, 0, 0), 0.1, (6000, 3)).astype(np.float32)
+    tree, eps = analysis.build_cluster_index(coords)
+
+    mask = np.zeros(6000, dtype=bool)
+    mask[:2000] = True
+    masked = analysis.cluster_from_seed(coords, 0, eps, mask=mask, kdtree=tree)
+    assert masked.max() < 2000
+
+    capped = analysis.cluster_from_seed(
+        coords, 0, eps * 50, kdtree=tree, max_points=500
+    )
+    assert len(capped) <= 500
+
+    # a seed the mask forbids yields just that seed (or nothing)
+    forbidden = analysis.cluster_from_seed(
+        coords, 5000, eps, mask=mask, kdtree=tree
+    )
+    assert set(forbidden.tolist()) <= {5000}

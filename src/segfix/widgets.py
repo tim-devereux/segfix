@@ -37,7 +37,7 @@ from qtpy.QtWidgets import (
 
 from . import operations as ops
 from .icons import icon
-from .lasso import LassoTool
+from .lasso import ClusterTool, LassoTool
 from .model import NOISE, UNASSIGNED, PointCloud
 from .viewer import (
     busy,
@@ -148,18 +148,27 @@ class SegFixController:
         # a completed lasso is redirected here instead of becoming the
         # selection — see _on_lasso. Also a mode choice, not per-cloud state.
         self.on_lasso_section = None
+        # KD-tree + gap threshold for the cluster tool, built lazily on first
+        # use and dropped whenever the point array changes (set_cloud).
+        self._cluster_tree = None
+        self._cluster_eps = None
         self.lasso = LassoTool(view, self._on_lasso)
+        self.cluster = ClusterTool(view, self._grow_cluster, self._on_cluster)
 
     def set_cloud(self, cloud: PointCloud) -> None:
         """Re-point the controller at a freshly loaded cloud (the view has
         already been handed the new points by the caller)."""
-        was_armed = self.lasso.armed
+        was_lasso, was_cluster = self.lasso.armed, self.cluster.armed
         self.lasso.set_armed(False)
+        self.cluster.set_armed(False)
+        self._cluster_tree = self._cluster_eps = None  # for the old points
         self.cloud = cloud
         self.save_path = cloud.source_path
         self.faded_ids = set()  # a fresh cloud starts with nothing faded
-        if was_armed:
+        if was_lasso:
             self.lasso.set_armed(True)
+        if was_cluster:
+            self.cluster.set_armed(True)
         if self.on_cloud_changed is not None:
             self.on_cloud_changed()
 
@@ -173,6 +182,30 @@ class SegFixController:
         current.update(int(i) for i in indices)
         self.view.selected = current
         self.view.status = f"Lasso selected {len(current)} points"
+
+    def _grow_cluster(self, seed: int) -> np.ndarray:
+        """Connected patch of points reachable from ``seed`` that share its
+        label and are currently shown — the cluster tool's payload."""
+        from . import analysis
+
+        coords = self.view.coords
+        if self._cluster_tree is None:
+            self._cluster_tree, self._cluster_eps = analysis.build_cluster_index(
+                coords
+            )
+        mask = self.cloud.labels == self.cloud.labels[seed]
+        shown = np.asarray(self.view.shown, dtype=bool)
+        if shown.shape[0] == mask.shape[0]:
+            mask &= shown
+        return analysis.cluster_from_seed(
+            coords, seed, self._cluster_eps, mask=mask, kdtree=self._cluster_tree
+        )
+
+    def _on_cluster(self, indices: np.ndarray, additive: bool) -> None:
+        current = set(self.view.selected) if additive else set()
+        current.update(int(i) for i in indices)
+        self.view.selected = current
+        self.view.status = f"Cluster selected {len(current)} points"
 
     def selected_indices(self) -> np.ndarray:
         return np.fromiter(self.view.selected, dtype=np.int64)
@@ -321,12 +354,25 @@ class SegFixWidget(QWidget):
         )
         self.tree_lasso_btn.toggled.connect(self.on_toggle_tree_lasso)
         interaction.addWidget(self.tree_lasso_btn)
+        self.cluster_btn = QPushButton("Cluster (K)")
+        self.cluster_btn.setIcon(icon("grow"))
+        self.cluster_btn.setIconSize(QSize(18, 18))
+        self.cluster_btn.setCheckable(True)
+        self.cluster_btn.setToolTip(
+            "Click a point to select the connected patch of the SAME tree's "
+            "points around it (a spatial region grow) — e.g. to grab an "
+            "over-segmented fragment or a wrongly-attached limb. Shift-click "
+            "adds to the selection."
+        )
+        self.cluster_btn.toggled.connect(self.on_toggle_cluster)
+        interaction.addWidget(self.cluster_btn)
         interaction.addStretch(1)
         # Each mode button lights up in its own colour while active.
         for btn, bg, fg in (
             (self.move_btn, "#2c4a33", "#9fd8a8"),
             (self.lasso_btn, "#7a6a20", "#ffe066"),
             (self.tree_lasso_btn, "#6a3a7a", "#e0b3ff"),
+            (self.cluster_btn, "#20506a", "#a8d8ff"),
         ):
             btn.setStyleSheet(
                 f"QPushButton:checked {{ background: {bg}; color: {fg}; "
@@ -571,6 +617,7 @@ class SegFixWidget(QWidget):
         self.c.lasso_filter = None
         self.c.on_lasso_section = None
         if checked:
+            self.c.cluster.set_armed(False)
             self._uncheck_other_modes(self.lasso_btn)
         else:
             self.move_btn.setChecked(True)
@@ -580,12 +627,24 @@ class SegFixWidget(QWidget):
         self.c.lasso_filter = self._filter_to_current_tree if checked else None
         self.c.on_lasso_section = None
         if checked:
+            self.c.cluster.set_armed(False)
             self._uncheck_other_modes(self.tree_lasso_btn)
             if self.current is None:
                 self.c.view.status = (
                     "Lasso tree: pick a tree to review first "
                     "(press Space or click a table row)"
                 )
+        else:
+            self.move_btn.setChecked(True)
+
+    def on_toggle_cluster(self, checked: bool) -> None:
+        """Arm/disarm the click-to-select-a-connected-patch tool."""
+        self.c.cluster.set_armed(checked)
+        if checked:
+            self.c.lasso.set_armed(False)
+            self.c.lasso_filter = None
+            self.c.on_lasso_section = None
+            self._uncheck_other_modes(self.cluster_btn)
         else:
             self.move_btn.setChecked(True)
 
@@ -597,6 +656,7 @@ class SegFixWidget(QWidget):
         self.c.lasso_filter = None
         self.c.on_lasso_section = self._on_lasso_section_drawn if checked else None
         if checked:
+            self.c.cluster.set_armed(False)
             self._uncheck_other_modes(self.section_draw_btn)
             self.c.view.status = "Lasso section: drag to outline the kept region"
         else:
@@ -613,7 +673,8 @@ class SegFixWidget(QWidget):
 
     def _uncheck_other_modes(self, active_btn) -> None:
         for btn in (
-            self.move_btn, self.lasso_btn, self.tree_lasso_btn, self.section_draw_btn,
+            self.move_btn, self.lasso_btn, self.tree_lasso_btn,
+            self.cluster_btn, self.section_draw_btn,
         ):
             if btn is active_btn:
                 continue
@@ -625,6 +686,7 @@ class SegFixWidget(QWidget):
         """Revert to camera/movement controls (Escape)."""
         self.lasso_btn.setChecked(False)  # disarms lasso via on_toggle_lasso
         self.tree_lasso_btn.setChecked(False)  # ditto, tree-only lasso
+        self.cluster_btn.setChecked(False)  # ditto, cluster picker
         self.section_draw_btn.setChecked(False)  # ditto, lasso-section drawing
         self.move_btn.setChecked(True)  # stay checked even if already in move
 
@@ -1362,6 +1424,7 @@ def bind_shortcuts(window, panel: SegFixWidget) -> None:
     bindings = {
         "L": panel.lasso_btn.toggle,
         "Ctrl+L": panel.tree_lasso_btn.toggle,
+        "K": panel.cluster_btn.toggle,
         "Esc": panel.on_move_mode,
         "Space": panel.on_done_next,
         "Left": lambda: panel._step(-1),

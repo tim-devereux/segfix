@@ -231,3 +231,93 @@ class LassoTool:
             inside &= shown
         indices = np.flatnonzero(inside)
         self.on_select(indices, additive=additive)
+
+
+class ClusterTool:
+    """Click a point to select the connected patch of same-tree points around
+    it.
+
+    A spatial region grow (breadth-first over a KD-tree, hop distance derived
+    from the cloud's own point spacing) restricted to points that share the
+    clicked point's label — so in a closed canopy it isolates one physically
+    connected lump of a tree instead of bleeding into everything it touches.
+    Handy for grabbing an over-segmented fragment or a wrongly-attached limb
+    in a single click.  Shift adds the patch to the current selection.
+
+    ``grow`` is ``(seed_index) -> np.ndarray`` (supplied by the controller,
+    which owns the labels and the cached KD-tree).
+    """
+
+    def __init__(self, view, grow, on_select, move_tol: int = 6):
+        self.view = view
+        self.grow = grow
+        self.on_select = on_select
+        self.move_tol = move_tol
+        self._armed = False
+        self._canvas = view.canvas
+        self._press = None
+
+    @property
+    def armed(self) -> bool:
+        return self._armed
+
+    def set_armed(self, armed: bool) -> None:
+        if armed == self._armed:
+            return
+        self._armed = armed
+        if armed:
+            self.view.set_camera_interactive(False)
+            self._connect(True)
+            self.view.status = (
+                "Cluster — click a point to select its connected patch "
+                "(Shift adds)"
+            )
+        else:
+            self._connect(False)
+            self.view.set_camera_interactive(True)
+            self._press = None
+            self.view.status = "Cluster off"
+
+    def toggle(self) -> bool:
+        self.set_armed(not self._armed)
+        return self._armed
+
+    def _connect(self, on: bool) -> None:
+        events = self._canvas.events
+        pairs = (
+            (events.mouse_press, self._on_press),
+            (events.mouse_release, self._on_release),
+        )
+        for signal, cb in pairs:
+            try:
+                signal.disconnect(cb)
+            except (ValueError, TypeError):
+                pass
+            if on:
+                signal.connect(cb)
+
+    def _on_press(self, event) -> None:
+        if not self._armed or event.button != 1:
+            return
+        p = event.pos
+        additive = "Shift" in getattr(event, "modifiers", ())
+        self._press = (float(p[0]), float(p[1]), additive)
+        event.handled = True
+
+    def _on_release(self, event) -> None:
+        if not self._armed or self._press is None:
+            return
+        px, py, additive = self._press
+        self._press = None
+        event.handled = True
+        dx, dy = float(event.pos[0]) - px, float(event.pos[1]) - py
+        if dx * dx + dy * dy > self.move_tol * self.move_tol:
+            return  # a drag, not a click — ignore
+        self._select_at((px, py), additive)
+
+    def _select_at(self, xy, additive: bool) -> None:
+        seed = self.view.pick_point(xy)
+        if seed is None:
+            self.view.status = "No point under the cursor"
+            return
+        self.on_select(self.grow(seed), additive=additive)

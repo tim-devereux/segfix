@@ -288,6 +288,38 @@ class CloudView:
         w_safe = np.where(valid, w, 1.0)
         return mapped[:, :2] / w_safe[:, None], valid
 
+    def pick_point(self, click_xy, radius: float = 9.0) -> int | None:
+        """Index of the point under ``click_xy`` (canvas pixels), or ``None``.
+
+        Among shown points whose projection lands within ``radius`` pixels of
+        the click, the frontmost (nearest the camera) wins, so clicking a
+        near tree doesn't grab a far one behind it. Falls back to the plain
+        nearest shown point within a looser radius.
+        """
+        if len(self._coords) == 0:
+            return None
+        tr = self.markers.get_transform(map_from="visual", map_to="canvas")
+        m = np.asarray(tr.map(self._coords.astype(np.float64)))
+        w = m[:, 3]
+        valid = w > 0
+        ws = np.where(valid, w, 1.0)
+        xy = m[:, :2] / ws[:, None]
+        depth = m[:, 2] / ws
+        shown = (
+            self._shown if len(self._shown) == len(self._coords)
+            else np.ones(len(self._coords), bool)
+        )
+        d2 = ((xy - np.asarray(click_xy, dtype=float)) ** 2).sum(1)
+        near = valid & shown & (d2 <= radius * radius)
+        if near.any():
+            cand = np.flatnonzero(near)
+            return int(cand[np.argmin(depth[cand])])
+        loose = valid & shown & (d2 <= (radius * 3) ** 2)
+        if loose.any():
+            cand = np.flatnonzero(loose)
+            return int(cand[np.argmin(d2[cand])])
+        return None
+
     # -- status ------------------------------------------------------
     @property
     def status(self):  # write-only in practice; getter kept for symmetry
