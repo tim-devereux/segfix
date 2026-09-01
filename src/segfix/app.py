@@ -125,8 +125,8 @@ def main(argv=None) -> int:
         help="Name of the per-point tree/instance ID field (auto-detected if omitted)",
     )
     parser.add_argument(
-        "--point-size", type=float, default=0.01,
-        help="Render size of points in metres (default: 0.01)",
+        "--point-size", type=float, default=3.0,
+        help="Render size of points in screen pixels (default: 3)",
     )
     args = parser.parse_args(argv)
 

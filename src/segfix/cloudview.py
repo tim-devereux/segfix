@@ -60,10 +60,6 @@ class CloudView:
     passes it where it used to pass a napari ``Viewer``.
     """
 
-    #: on-screen pixel clamp for the marker size, so a zoomed-out cloud keeps
-    #: its per-tree colours instead of fading to antialiased grey
-    CANVAS_SIZE_LIMITS = (3, 10000)
-
     def __init__(self, bgcolor: str = "#262626"):
         self.canvas = scene.SceneCanvas(
             keys=None, bgcolor=bgcolor, show=False, size=(800, 800)
@@ -77,18 +73,26 @@ class CloudView:
         self.view.camera.center = (0.0, 0.0, 0.0)
         self.view.camera.scale_factor = 10.0
 
+        # Fixed pixel-size flat discs. Not shaded spheres (vispy's spherical
+        # shading darkens the back hemisphere until a zoomed-out plot is a
+        # near-black silhouette) and not scene-unit scaling (vispy 0.16's
+        # canvas_size_limits clamp doesn't hold, so metre-sized points go
+        # sub-pixel and vanish). Pixels keep every point its true colour and
+        # visible at any zoom — the size is the panel's "Point size" spinner.
         self.markers = scene.visuals.Markers(
-            parent=self.view.scene, scaling="scene", spherical=True
+            parent=self.view.scene, scaling="fixed", spherical=False
         )
         self.markers.antialias = 0.3
-        self.markers.canvas_size_limits = self.CANVAS_SIZE_LIMITS
-        self.markers.set_gl_state(depth_test=True, blend=True)
+        # 'opaque': depth-test on, blending off. The points are fully opaque,
+        # so a plain z-buffer is right — the default translucent blend makes
+        # thousands of overlapping points wash toward white.
+        self.markers.set_gl_state("opaque", depth_test=True, cull_face=False)
         # A second marker set drawn on top: a translucent white halo on the
         # currently selected points (napari's Points layer did this itself).
         self.highlight = scene.visuals.Markers(
-            parent=self.view.scene, scaling="scene"
+            parent=self.view.scene, scaling="fixed", spherical=False
         )
-        self.highlight.set_gl_state(depth_test=False, blend=True)
+        self.highlight.set_gl_state("translucent", depth_test=False)
         # Wireframe box(es) around the tree under review.
         self.bbox = scene.visuals.Line(
             parent=self.view.scene, connect="segments", width=2, antialias=True
@@ -99,7 +103,7 @@ class CloudView:
         self._face_color = np.empty((0, 4), np.float32)
         self._shown = np.empty(0, dtype=bool)
         self._selected: set[int] = set()
-        self._size = 0.01
+        self._size = 3.0  # marker diameter in screen pixels
 
         #: fn(str) -> None, set by the shell to write the status bar
         self.on_status = None
@@ -179,7 +183,6 @@ class CloudView:
         self.markers.set_data(
             pos=pos, face_color=fc, size=self._size, edge_width=0
         )
-        self.markers.canvas_size_limits = self.CANVAS_SIZE_LIMITS
         self.canvas.update()
 
     # -- selection ----------------------------------------------------
@@ -205,11 +208,10 @@ class CloudView:
         self.highlight.visible = True
         self.highlight.set_data(
             pos=self._coords[idx],
-            face_color=(1.0, 1.0, 1.0, 0.45),
-            size=self._size * 2.2,
+            face_color=(1.0, 1.0, 1.0, 0.9),
+            size=self._size + 1.5,
             edge_width=0,
         )
-        self.highlight.canvas_size_limits = (4, 10000)
         self.canvas.update()
 
     # -- bounding box ----------------------------------------------------
