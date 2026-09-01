@@ -25,22 +25,22 @@ import sys
 def _prefer_discrete_gpu() -> None:
     """Best-effort: on a hybrid-graphics machine, point OpenGL/Direct3D at
     the discrete GPU instead of whatever the platform defaults to (often
-    the weaker integrated one — see the "GPU:" status-bar label added by
-    :func:`viewer.add_gpu_status_widget` to confirm which one actually got
-    used). Detects hardware rather than hardcoding one machine's GPU model
-    name, never overrides a preference already set (env var on Linux, the
-    registry key on Windows), and never raises — worst case this is a
-    no-op and the platform default stands.
+    the weaker integrated one — see the "GPU:" status-bar label the main
+    window shows to confirm which one actually got used). Detects hardware
+    rather than hardcoding one machine's GPU model name, never overrides a
+    preference already set (env var on Linux, the registry key on Windows),
+    and never raises — worst case this is a no-op and the platform default
+    stands.
 
-    Must run before ``import napari`` (like the Wayland workaround below):
-    the Linux/WSL half relies on the underlying GL/EGL libraries not having
-    picked an adapter yet, which happens at first context creation, not at
-    process start — setting the env var any later risks losing the race
-    against whichever import gets there first. The Windows half doesn't
-    have that race (it's a registry key, not an env var) but only takes
-    effect from the *next* launch of this Python executable, not this one:
-    Windows reads a process's GPU preference at process creation, before
-    any of our code has had a chance to run.
+    Must run before any GL context is created (and before the Qt platform
+    plugin is chosen): the Linux/WSL half relies on the underlying GL/EGL
+    libraries not having picked an adapter yet, which happens at first
+    context creation, not at process start — setting the env var any later
+    risks losing the race. The Windows half doesn't have that race (it's a
+    registry key, not an env var) but only takes effect from the *next*
+    launch of this Python executable, not this one: Windows reads a
+    process's GPU preference at process creation, before any of our code
+    has had a chance to run.
     """
     try:
         if sys.platform == "win32":
