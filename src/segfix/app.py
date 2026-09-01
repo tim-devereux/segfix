@@ -194,6 +194,7 @@ def _run_scene(args) -> int:
     from qtpy.QtCore import Qt
     from qtpy.QtWidgets import QApplication, QLabel, QMainWindow
 
+    from . import __version__
     from .cloudview import CloudView
     from .icons import app_icon
     from .model import PointCloud
@@ -206,7 +207,7 @@ def _run_scene(args) -> int:
     app.setWindowIcon(app_icon())
 
     win = QMainWindow()
-    win.setWindowTitle(f"segfix — {args.cloud}")
+    win.setWindowTitle(f"segfix {__version__} — {args.cloud}")
     win.setWindowIcon(app_icon())
 
     view = CloudView()

@@ -3,24 +3,40 @@
 A GUI tool to **fix the instance segmentation of tree point clouds**. Load a
 segmented LiDAR cloud, see each tree in its own colour, and correct mistakes by
 lassoing points and reassigning, splitting off, or dismissing them — then save
-back to the PLY you started from.
+back to a corrected version of the input, retaining all fields.
 
 Built on [napari](https://napari.org) for fast 3D rendering and point selection.
 
-<img width="1920" height="1013" alt="image" src="https://github.com/user-attachments/assets/dc454e6e-93ad-45f9-aa20-a61d225c0a94" />
+![segfix reviewing a segmented plot](https://github.com/user-attachments/assets/dc454e6e-93ad-45f9-aa20-a61d225c0a94)
 
 ## Contributing
 
 Feedback, issues, and PRs all welcome. For issues please use [GitHub issues](https://github.com/tim-devereux/segfix/issues) (not a personal message) so the community can benefit.
+
 ## Install
 
 Requires Python 3.10–3.12 (napari/Qt do not yet ship wheels for 3.13+).
 
 ```bash
-git clone https://github.com/tim-devereux/segfix.git
-cd segfix
+pip install segfix
+```
+
+napari and Qt are large; a dedicated environment keeps them out of your base
+install:
+
+```bash
 conda create -n segfix python=3.11
 conda activate segfix
+pip install segfix
+```
+
+### From source
+
+For development, or to get `scripts/make_sample.py`:
+
+```bash
+git clone https://github.com/tim-devereux/segfix.git
+cd segfix
 pip install -e .
 ```
 
@@ -28,19 +44,24 @@ pip install -e .
 
 ```bash
 segfix
-# or generate a practice cloud with built-in segmentation errors first:
+```
+
+From a source checkout you can generate a practice cloud with built-in
+segmentation errors first:
+
+```bash
 python scripts/make_sample.py sample.ply
 python scripts/make_sample.py --format las sample.las   # arbor-shaped LAS
 ```
 
-`segfix` always opens a startup dialog — there is no path argument. Double-click
+`segfix` will open a startup dialog. Double-click
 a recent project to reopen it, or click **New Project…** to import a point cloud
 file. Importing copies the file into a new project folder (created inside the
 directory you pick, named after the source file) and opens that copy — edits are
 always saved to the copy, never the original source file.
 
 Every project opened this way is recorded in `~/.config/segfix/registry.json`
-(a plain JSON file, not a database) so it shows up in the "Recent projects"
+(a plain JSON file) so it shows up in the "Recent projects"
 list next time — most-recently-opened at the top and preselected, each row
 showing how long ago it was last opened.
 
