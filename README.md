@@ -13,14 +13,13 @@ Feedback, issues, and PRs all welcome. For issues please use [GitHub issues](htt
 
 ## Install
 
-Requires Python 3.10–3.12 (napari/Qt do not yet ship wheels for 3.13+).
+Requires Python 3.10–3.12.
 
 ```bash
 pip install segfix
 ```
 
-napari and Qt are large; a dedicated environment keeps them out of your base
-install:
+Using a dedicated environment:
 
 ```bash
 conda create -n segfix python=3.11
@@ -183,7 +182,7 @@ so a half-finished plot resumes where you left off.
 | `operations.py` | pure, UI-agnostic label edits (reassign/split/unassign/noise) |
 | `analysis.py` | which trees touch which, by sampled point distance (KD-tree) |
 | `lasso.py` | 3D screen-space lasso: camera projection + polygon test |
-| `viewer.py` | napari layer + label→colour mapping |
+| `viewer.py` | label→colour mapping |
 | `widgets.py` | Qt dock panel wiring selection → operations |
 | `icons.py` | inline SVG icons for the panel buttons and window |
 | `treecatalog.py` | default mode: memory-mapped tree-label grouping, neighbour load + write-back (`TreeCatalog` = PLY, `LasCatalog` = LAS, `open_catalog` picks) |
