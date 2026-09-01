@@ -504,6 +504,11 @@ class SegFixWidget(QWidget):
         self.c.on_lasso_section = None
         if checked:
             self._uncheck_other_modes(self.tree_lasso_btn)
+            if self.current is None:
+                self.c.view.status = (
+                    "Lasso tree: pick a tree to review first "
+                    "(press Space or click a table row)"
+                )
         else:
             self.move_btn.setChecked(True)
 
@@ -522,9 +527,11 @@ class SegFixWidget(QWidget):
 
     def _filter_to_current_tree(self, indices: np.ndarray) -> np.ndarray:
         """Keep only the points among ``indices`` already in the current
-        tree — no restriction if nothing's under review yet."""
+        tree. With no tree under review there is nothing to narrow to, so
+        select nothing — falling through to the whole lasso would just make
+        this behave like the plain Lasso tool."""
         if self.current is None:
-            return indices
+            return indices[:0]
         return indices[self.c.cloud.labels[indices] == self.current]
 
     def _uncheck_other_modes(self, active_btn) -> None:
