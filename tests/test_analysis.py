@@ -46,40 +46,39 @@ def test_neighbours_by_points_respects_reach():
     assert analysis.neighbours_by_points(cloud, 1, reach=2.0) == {2}
 
 
-def test_cluster_from_seed_grows_one_connected_blob():
-    """Two dense blobs with a wide empty gap: a region grow from a seed in
-    one must stay inside it."""
+def test_connected_patch_isolates_the_blob_around_the_seed():
+    """One tree ID split into two physically separate blobs plus a second
+    tree: connected_patch from a seed in one blob returns just that blob."""
     rng = np.random.default_rng(0)
-    a = rng.normal((0, 0, 0), 0.05, (4000, 3))
-    b = rng.normal((5, 0, 0), 0.05, (4000, 3))
-    coords = np.vstack([a, b]).astype(np.float32)
-    tree, eps = analysis.build_cluster_index(coords)
+    blob_a = rng.normal((0, 0, 0), 0.05, (2000, 3))
+    blob_b = rng.normal((5, 0, 0), 0.05, (2000, 3))  # same label, far away
+    other = rng.normal((0.1, 0, 0), 0.05, (2000, 3))  # different label, touching a
+    coords = np.vstack([blob_a, blob_b, other]).astype(np.float32)
+    labels = np.concatenate([
+        np.full(2000, 7), np.full(2000, 7), np.full(2000, 9)
+    ]).astype(np.int32)
+    gap = analysis.point_spacing(coords) * 4.0
 
-    got_a = analysis.cluster_from_seed(coords, 0, eps, kdtree=tree)
-    assert (got_a < 4000).all()
-    assert len(got_a) > 3500  # nearly the whole blob is connected
+    got = analysis.connected_patch(coords, labels, seed=10, eps=gap)
+    assert (got < 2000).all()          # only blob A
+    assert len(got) > 1800             # nearly all of it
+    assert 9 not in labels[got]        # never crosses into the other tree
 
-    got_b = analysis.cluster_from_seed(coords, 5000, eps, kdtree=tree)
-    assert (got_b >= 4000).all()
+    got_b = analysis.connected_patch(coords, labels, seed=2500, eps=gap)
+    assert (got_b >= 2000).all() and (got_b < 4000).all()  # only blob B
 
 
-def test_cluster_from_seed_respects_mask_and_cap():
+def test_connected_components_within_labels_disjoint_blobs():
     rng = np.random.default_rng(1)
-    coords = rng.normal((0, 0, 0), 0.1, (6000, 3)).astype(np.float32)
-    tree, eps = analysis.build_cluster_index(coords)
+    a = rng.normal((0, 0, 0), 0.03, (500, 3))
+    b = rng.normal((3, 0, 0), 0.03, (500, 3))
+    coords = np.vstack([a, b]).astype(np.float32)
+    comp = analysis.connected_components_within(coords, eps=0.2)
+    assert len(np.unique(comp)) == 2
+    assert len(np.unique(comp[:500])) == 1
+    assert comp[0] != comp[500]
 
-    mask = np.zeros(6000, dtype=bool)
-    mask[:2000] = True
-    masked = analysis.cluster_from_seed(coords, 0, eps, mask=mask, kdtree=tree)
-    assert masked.max() < 2000
 
-    capped = analysis.cluster_from_seed(
-        coords, 0, eps * 50, kdtree=tree, max_points=500
-    )
-    assert len(capped) <= 500
-
-    # a seed the mask forbids yields just that seed (or nothing)
-    forbidden = analysis.cluster_from_seed(
-        coords, 5000, eps, mask=mask, kdtree=tree
-    )
-    assert set(forbidden.tolist()) <= {5000}
+def test_point_spacing_matches_a_regular_grid():
+    g = np.mgrid[0:10, 0:10, 0:3].reshape(3, -1).T.astype(np.float32) * 0.5
+    assert abs(analysis.point_spacing(g) - 0.5) < 1e-6

@@ -235,18 +235,25 @@ class LassoTool:
 
 class ClusterTool:
     """Click a point to select the connected patch of same-tree points around
-    it.
+    it; click again in the same spot to grow the patch wider.
 
-    A spatial region grow (breadth-first over a KD-tree, hop distance derived
-    from the cloud's own point spacing) restricted to points that share the
-    clicked point's label — so in a closed canopy it isolates one physically
-    connected lump of a tree instead of bleeding into everything it touches.
-    Handy for grabbing an over-segmented fragment or a wrongly-attached limb
-    in a single click.  Shift adds the patch to the current selection.
+    The first click selects the physically connected blob of the clicked
+    point's own tree that the click sits in — so in a closed canopy it
+    isolates one continuous lump instead of bleeding into everything it
+    touches.  Each further click on roughly the same spot, within a couple of
+    seconds, keeps the same seed and steps up a level: the whole of that tree
+    (connected or not), then the tree plus one more ring of the trees it
+    touches per extra click.  Move away or pause and the next click starts a
+    fresh level-0 blob.  Shift adds to the current selection.
 
-    ``grow`` is ``(seed_index) -> np.ndarray`` (supplied by the controller,
-    which owns the labels and the cached KD-tree).
+    ``grow`` is ``(seed_index, level) -> np.ndarray`` (supplied by the
+    controller, which owns the labels and the cached KD-tree).
     """
+
+    #: a click within this many pixels of the last one, and within
+    #: ``CHAIN_SECONDS`` of it, continues the sequence instead of reseeding
+    CHAIN_PIXELS = 30
+    CHAIN_SECONDS = 2.5
 
     def __init__(self, view, grow, on_select, move_tol: int = 6):
         self.view = view
@@ -256,6 +263,7 @@ class ClusterTool:
         self._armed = False
         self._canvas = view.canvas
         self._press = None
+        self._chain = None  # dict(seed, xy, t, level) while a sequence runs
 
     @property
     def armed(self) -> bool:
@@ -265,12 +273,13 @@ class ClusterTool:
         if armed == self._armed:
             return
         self._armed = armed
+        self._chain = None
         if armed:
             self.view.set_camera_interactive(False)
             self._connect(True)
             self.view.status = (
-                "Cluster — click a point to select its connected patch "
-                "(Shift adds)"
+                "Cluster — click a point to select its patch, click again "
+                "to grow it (Shift adds)"
             )
         else:
             self._connect(False)
@@ -316,8 +325,30 @@ class ClusterTool:
         self._select_at((px, py), additive)
 
     def _select_at(self, xy, additive: bool) -> None:
-        seed = self.view.pick_point(xy)
-        if seed is None:
-            self.view.status = "No point under the cursor"
-            return
-        self.on_select(self.grow(seed), additive=additive)
+        import time
+
+        now = time.monotonic()
+        ch = self._chain
+        cont = (
+            ch is not None
+            and now - ch["t"] <= self.CHAIN_SECONDS
+            and (xy[0] - ch["xy"][0]) ** 2 + (xy[1] - ch["xy"][1]) ** 2
+            <= self.CHAIN_PIXELS ** 2
+        )
+        if cont:
+            seed, level = ch["seed"], ch["level"] + 1
+        else:
+            seed = self.view.pick_point(xy)
+            if seed is None:
+                self.view.status = "No point under the cursor"
+                self._chain = None
+                return
+            level = 0
+        indices = self.grow(seed, level)
+        self._chain = {
+            "seed": seed,
+            "xy": (float(xy[0]), float(xy[1])),
+            "t": now,
+            "level": level,
+        }
+        self.on_select(indices, additive=additive, level=level)

@@ -148,10 +148,12 @@ class SegFixController:
         # a completed lasso is redirected here instead of becoming the
         # selection — see _on_lasso. Also a mode choice, not per-cloud state.
         self.on_lasso_section = None
-        # KD-tree + gap threshold for the cluster tool, built lazily on first
-        # use and dropped whenever the point array changes (set_cloud).
-        self._cluster_tree = None
-        self._cluster_eps = None
+        # Cluster-tool caches, all keyed to the current point array and
+        # dropped in set_cloud: the gap distance, and per-tree connected-
+        # component labellings (built once per tree the first time it's
+        # clicked).
+        self._cluster_gap: float | None = None
+        self._cluster_cc: dict[int, tuple] = {}
         self.lasso = LassoTool(view, self._on_lasso)
         self.cluster = ClusterTool(view, self._grow_cluster, self._on_cluster)
 
@@ -161,7 +163,7 @@ class SegFixController:
         was_lasso, was_cluster = self.lasso.armed, self.cluster.armed
         self.lasso.set_armed(False)
         self.cluster.set_armed(False)
-        self._cluster_tree = self._cluster_eps = None  # for the old points
+        self._cluster_gap, self._cluster_cc = None, {}  # for the old points
         self.cloud = cloud
         self.save_path = cloud.source_path
         self.faded_ids = set()  # a fresh cloud starts with nothing faded
@@ -183,29 +185,73 @@ class SegFixController:
         self.view.selected = current
         self.view.status = f"Lasso selected {len(current)} points"
 
-    def _grow_cluster(self, seed: int) -> np.ndarray:
-        """Connected patch of points reachable from ``seed`` that share its
-        label and are currently shown — the cluster tool's payload."""
+    def _cluster_component(self, seed_label: int, gap: float):
+        """(sorted point indices, component-id per index) for one tree's
+        ``gap``-connected blobs — computed once per tree, then cached."""
         from . import analysis
 
-        coords = self.view.coords
-        if self._cluster_tree is None:
-            self._cluster_tree, self._cluster_eps = analysis.build_cluster_index(
-                coords
+        cached = self._cluster_cc.get(seed_label)
+        if cached is None:
+            same = np.flatnonzero(self.cloud.labels == seed_label)
+            comp = (
+                analysis.connected_components_within(self.view.coords[same], gap)
+                if same.size else np.empty(0, np.int64)
             )
-        mask = self.cloud.labels == self.cloud.labels[seed]
-        shown = np.asarray(self.view.shown, dtype=bool)
-        if shown.shape[0] == mask.shape[0]:
-            mask &= shown
-        return analysis.cluster_from_seed(
-            coords, seed, self._cluster_eps, mask=mask, kdtree=self._cluster_tree
-        )
+            cached = (same, comp)
+            self._cluster_cc[seed_label] = cached
+        return cached
 
-    def _on_cluster(self, indices: np.ndarray, additive: bool) -> None:
+    def _grow_cluster(self, seed: int, level: int = 0) -> np.ndarray:
+        """The cluster tool's payload for click number ``level`` of a
+        sequence (see :class:`~segfix.lasso.ClusterTool`):
+
+        - 0: the connected blob of the seed's own tree around the click.
+        - 1: the whole of the seed's tree (connected or not).
+        - 2+: the tree plus ``level - 1`` rings of trees it touches.
+
+        Everything is intersected with what's currently shown.
+        """
+        from . import analysis
+
+        labels = self.cloud.labels
+        seed_lbl = int(labels[seed])
+        if self._cluster_gap is None:
+            self._cluster_gap = analysis.point_spacing(self.view.coords) * 4.0
+
+        if level == 0:
+            same, comp = self._cluster_component(seed_lbl, self._cluster_gap)
+            if same.size <= 1:
+                idx = same
+            else:
+                local = int(np.searchsorted(same, seed))
+                idx = same[comp == comp[local]]
+        elif level == 1:
+            idx = np.flatnonzero(labels == seed_lbl)
+        else:
+            grown = {seed_lbl}
+            for _ in range(level - 1):
+                ring = set()
+                for t in grown:
+                    ring |= analysis.neighbours_by_points(
+                        self.cloud, t, max(self._cluster_gap, 0.15)
+                    )
+                if ring <= grown:
+                    break
+                grown |= ring
+            idx = np.flatnonzero(np.isin(labels, list(grown)))
+
+        shown = np.asarray(self.view.shown, dtype=bool)
+        if shown.shape[0] == len(labels):
+            idx = idx[shown[idx]]
+        return idx
+
+    def _on_cluster(self, indices: np.ndarray, additive: bool,
+                    level: int = 0) -> None:
         current = set(self.view.selected) if additive else set()
         current.update(int(i) for i in indices)
         self.view.selected = current
-        self.view.status = f"Cluster selected {len(current)} points"
+        tail = " — click again to grow" if level == 0 else f" (level {level})"
+        self.view.status = f"Cluster selected {len(current)} points{tail}"
 
     def selected_indices(self) -> np.ndarray:
         return np.fromiter(self.view.selected, dtype=np.int64)
