@@ -1,4 +1,4 @@
-"""Qt dock widget wiring the napari point selection to the fix operations.
+"""Qt dock widget wiring the lasso selection to the fix operations.
 
 The workflow is a review queue.  The table lists the trees currently loaded —
 the one picked in scene mode's "All Trees" plus its neighbours, or the whole
@@ -41,18 +41,17 @@ from .model import NOISE, UNASSIGNED, PointCloud
 from .viewer import (
     busy,
     colors_for_labels,
-    refresh_layer,
+    refresh_view,
     visibility_mask,
 )
 
 
 class SegFixController:
-    """Holds the editable cloud + napari layer and applies operations."""
+    """Holds the editable cloud + the 3D view, and applies operations."""
 
-    def __init__(self, viewer, cloud: PointCloud, layer):
-        self.viewer = viewer
+    def __init__(self, view, cloud: PointCloud):
+        self.view = view
         self.cloud = cloud
-        self.layer = layer
         self.save_path = cloud.source_path
         # Tree IDs the panel has "faded": rendered at FADED_ALPHA opacity but
         # still shown and still selectable (unlike a hidden tree). Lives here,
@@ -62,7 +61,7 @@ class SegFixController:
         # Optional override: when set (project/scene mode), Save delegates
         # here instead of writing a single file. Signature: () -> str.
         self.on_save_override = None
-        # Set by the panel so it can re-hook layer events after a reload.
+        # Set by the panel so it can re-hook view state after a reload.
         self.on_cloud_changed = None
         # Optional fn(indices)->indices narrowing a lasso's result before it
         # becomes the selection — set by the panel for the "current tree
@@ -73,17 +72,16 @@ class SegFixController:
         # a completed lasso is redirected here instead of becoming the
         # selection — see _on_lasso. Also a mode choice, not per-cloud state.
         self.on_lasso_section = None
-        self.lasso = LassoTool(viewer, layer, self._on_lasso)
+        self.lasso = LassoTool(view, self._on_lasso)
 
-    def set_cloud(self, cloud: PointCloud, layer) -> None:
-        """Re-point the controller at a freshly loaded cloud/layer."""
+    def set_cloud(self, cloud: PointCloud) -> None:
+        """Re-point the controller at a freshly loaded cloud (the view has
+        already been handed the new points by the caller)."""
         was_armed = self.lasso.armed
         self.lasso.set_armed(False)
         self.cloud = cloud
-        self.layer = layer
         self.save_path = cloud.source_path
         self.faded_ids = set()  # a fresh cloud starts with nothing faded
-        self.lasso = LassoTool(self.viewer, layer, self._on_lasso)
         if was_armed:
             self.lasso.set_armed(True)
         if self.on_cloud_changed is not None:
@@ -95,30 +93,29 @@ class SegFixController:
             return
         if self.lasso_filter is not None:
             indices = self.lasso_filter(indices)
-        current = set(self.layer.selected_data) if additive else set()
+        current = set(self.view.selected) if additive else set()
         current.update(int(i) for i in indices)
-        self.layer.selected_data = current
-        self.viewer.status = f"Lasso selected {len(current)} points"
+        self.view.selected = current
+        self.view.status = f"Lasso selected {len(current)} points"
 
     def selected_indices(self) -> np.ndarray:
-        return np.fromiter(self.layer.selected_data, dtype=np.int64)
+        return np.fromiter(self.view.selected, dtype=np.int64)
 
     def _after_edit(self, message: str) -> None:
         # Recolour only the points whose label just moved (the op records them
         # on the cloud); a whole-cloud recompute per keystroke is the slow path.
-        refresh_layer(
-            self.layer, self.cloud, self.faded_ids,
+        refresh_view(
+            self.view, self.cloud, self.faded_ids,
             changed=self.cloud.last_changed,
         )
-        self.layer.selected_data = set()
-        self.viewer.status = message
+        self.view.selected = set()
+        self.view.status = message
 
 
 class SegFixWidget(QWidget):
     """The dock panel: the tree queue plus the few ops the loop needs."""
 
     DONE_BG = QColor(35, 62, 42)  # green tint marking finished rows
-    BBOX_LAYER = "tree bbox"
     HIDE_COL = 3
     FADE_COL = 4
 
@@ -489,8 +486,8 @@ class SegFixWidget(QWidget):
         return label
 
     def _on_point_size(self, value: float) -> None:
-        if self.c.layer is not None and len(self.c.layer.data):
-            self.c.layer.size = value
+        if len(self.c.view.coords):
+            self.c.view.size = value
 
     def on_toggle_lasso(self, checked: bool) -> None:
         self.c.lasso.set_armed(checked)
@@ -519,7 +516,7 @@ class SegFixWidget(QWidget):
         self.c.on_lasso_section = self._on_lasso_section_drawn if checked else None
         if checked:
             self._uncheck_other_modes(self.section_draw_btn)
-            self.c.viewer.status = "Lasso section: drag to outline the kept region"
+            self.c.view.status = "Lasso section: drag to outline the kept region"
         else:
             self.move_btn.setChecked(True)
 
@@ -548,7 +545,7 @@ class SegFixWidget(QWidget):
         self.move_btn.setChecked(True)  # stay checked even if already in move
 
     def _on_cloud_changed(self) -> None:
-        """A new cloud/layer was loaded: reset per-cloud state, re-hook."""
+        """A new cloud was loaded: reset per-cloud state, re-hook."""
         self.current = None
         self.hidden_ids = set()
         # A slab computed for the previous cloud's coordinate space doesn't
@@ -564,58 +561,8 @@ class SegFixWidget(QWidget):
         self._on_point_size(self.size_spin.value())  # size persists across loads
         self._update_info()
         self._update_selection()
-        try:
-            self.c.layer.events.highlight.connect(
-                lambda *_: self._update_selection()
-            )
-        except AttributeError:
-            pass  # selection count then only refreshes after edits
-        # Layer-level bindings shadow napari's own Points shortcuts ('1',
-        # Delete and Backspace all hard-delete points from the layer; 'a'
-        # selects all; Space pans).
-        layer_keys = {
-            "1": self.on_noise,
-            "Delete": self.on_noise,
-            "Backspace": self.on_noise,
-            "a": self.on_add,
-            "Space": self.on_done_next,
-        }
-        for key, fn in layer_keys.items():
-            self.c.layer.bind_key(key, lambda _l, _f=fn: _f(), overwrite=True)
-        # napari's Points layer also offers Add/Select/Transform modes (keys
-        # 2/3/5, or P/S) that bypass segfix's own tools entirely: Add drops
-        # arbitrary new points, Transform rotates/scales/translates the
-        # whole layer instead of the tree data, silently desyncing the view
-        # from cloud.coords. Pin the layer to pan/zoom and refuse any other
-        # mode, and replace napari's default status-bar hint (always "use
-        # <2> for add points, ... <5> for transform" — it lists every mode
-        # *other* than the current one, so this is shown constantly, not
-        # just while one of those modes is active) with segfix's real ones.
-        self._pin_layer_mode()
-        self.c.layer.events.mode.connect(self._pin_layer_mode)
-
-    def _pin_layer_mode(self, *_args) -> None:
-        """Force the Points layer back to pan/zoom if anything switches it
-        into one of napari's own edit modes, and blank the status-bar help
-        text napari would otherwise show for it (its default, which lists
-        those other modes). See _on_cloud_changed.
-
-        Blanking needs both ``layer.help`` *and* ``viewer.help`` — they're
-        separate properties, and only the latter actually reaches the
-        status bar (``layer.help`` alone was this method's bug for a
-        while: it looked fixed in a quick check, but the real text sticks
-        to whatever ``viewer.help`` last was, which napari sets itself, on
-        its own schedule, from the active layer's ``help`` — so this needs
-        to run every time, not just once at setup, to keep winning that
-        race. Its widget's own visibility isn't ours to control either:
-        napari's StatusBarWidget.do_layout() force-shows it back on every
-        resize regardless of any setVisible(False) — blank text is the
-        only thing that reliably stops it from being shown."""
-        layer = self.c.layer
-        if layer.mode != "pan_zoom":
-            layer.mode = "pan_zoom"
-        layer.help = ""
-        self.c.viewer.help = ""
+        # Keep the selection readout live as the lasso changes it.
+        self.c.view.on_selection_changed = self._update_selection
 
     def _update_info(self) -> None:
         cloud = self.c.cloud
@@ -720,12 +667,12 @@ class SegFixWidget(QWidget):
             self.tree_table.selectRow(row)
         self._table_updating = False
         if changed:
-            self.c.layer.selected_data = set()
+            self.c.view.selected = set()
         self._update_tree_bbox([] if tid is None else [tid])
         self._update_current_info()
         if changed and fly and tid is not None:
             self._fly_to(tid)
-            self.c.viewer.status = (
+            self.c.view.status = (
                 f"Tree {tid} — lasso (L) then A/N/U/X to fix, "
                 "Space to mark done and continue"
             )
@@ -751,7 +698,7 @@ class SegFixWidget(QWidget):
     def on_done_next(self) -> None:
         """Space: mark the current tree done, save, jump to the next."""
         if not self.tree_table.rowCount():
-            self.c.viewer.status = "No trees to review"
+            self.c.view.status = "No trees to review"
             return
         start = -1
         if self.current is not None:
@@ -760,7 +707,7 @@ class SegFixWidget(QWidget):
         nxt = self._next_pending(start if start is not None else -1)
         if nxt is None:
             self._set_current(None)
-            self.c.viewer.status = "All trees done — save when ready"
+            self.c.view.status = "All trees done — save when ready"
             return
         self._set_current(nxt)
 
@@ -771,11 +718,8 @@ class SegFixWidget(QWidget):
         if not len(pts):
             return
         center = pts.mean(axis=0)
-        order = self.c.viewer.dims.order  # camera axes follow display order
-        self.c.viewer.camera.center = tuple(float(center[d]) for d in order)
         span = float(np.max(pts.max(axis=0) - pts.min(axis=0)))
-        canvas = getattr(self.c.viewer, "_canvas_size", (800, 800))
-        self.c.viewer.camera.zoom = 0.7 * min(canvas) / max(span, 0.5)
+        self.c.view.fly_to(center, span)
 
     def on_hide_neighbours(self) -> None:
         """Toggle hiding every other tree currently loaded, leaving only the
@@ -793,7 +737,7 @@ class SegFixWidget(QWidget):
         so hide by loaded-set membership instead of recomputing distances.
         """
         if self.current is None:
-            self.c.viewer.status = (
+            self.c.view.status = (
                 "No tree under review — press Space or click a table row"
             )
             return
@@ -806,7 +750,7 @@ class SegFixWidget(QWidget):
             verb = "Hid"
         self._refresh_tree_table()  # updates the 👁 checkboxes to match
         self._apply_visibility()
-        self.c.viewer.status = f"{verb} {len(neighbours)} other tree(s)"
+        self.c.view.status = f"{verb} {len(neighbours)} other tree(s)"
 
     def on_fade_neighbours(self) -> None:
         """Toggle fading every other tree currently loaded, so only the tree
@@ -814,7 +758,7 @@ class SegFixWidget(QWidget):
         already. Same loaded-set logic as :meth:`on_hide_neighbours`, but the
         others stay visible and selectable."""
         if self.current is None:
-            self.c.viewer.status = (
+            self.c.view.status = (
                 "No tree under review — press Space or click a table row"
             )
             return
@@ -827,16 +771,16 @@ class SegFixWidget(QWidget):
             verb = "Faded"
         self._refresh_tree_table()  # updates the Fade checkboxes to match
         self._apply_transparency()
-        self.c.viewer.status = f"{verb} {len(neighbours)} other tree(s)"
+        self.c.view.status = f"{verb} {len(neighbours)} other tree(s)"
 
     def _apply_visibility(self) -> None:
-        if self.c.layer is None or not len(self.c.layer.data):
+        if not len(self.c.view.coords):
             return
         hidden = (
             np.isin(self.c.cloud.labels, list(self.hidden_ids))
             if self.hidden_ids else None
         )
-        self.c.layer.shown = visibility_mask(
+        self.c.view.shown = visibility_mask(
             self.c.cloud.labels,
             hide_unassigned=not self.show_unassigned.isChecked(),
             hidden=hidden,
@@ -858,7 +802,7 @@ class SegFixWidget(QWidget):
 
     def _on_show_unassigned(self, checked: bool) -> None:
         self._apply_visibility()
-        self.c.viewer.status = (
+        self.c.view.status = (
             "Unassigned/noise points shown" if checked
             else "Unassigned/noise points hidden"
         )
@@ -895,7 +839,7 @@ class SegFixWidget(QWidget):
 
     def _on_cross_section_toggled(self, checked: bool) -> None:
         self._apply_visibility()
-        self.c.viewer.status = (
+        self.c.view.status = (
             "Cross section on — only the slab is shown/selectable"
             if checked else "Cross section off"
         )
@@ -950,13 +894,13 @@ class SegFixWidget(QWidget):
         self.lasso_section_enable.blockSignals(False)
         self._update_lasso_section_label()
         self._apply_visibility()
-        self.c.viewer.status = (
+        self.c.view.status = (
             f"Lasso section drawn — kept {mask.sum():,} of {n:,} points"
         )
 
     def _on_lasso_section_toggled(self, checked: bool) -> None:
         self._apply_visibility()
-        self.c.viewer.status = (
+        self.c.view.status = (
             "Lasso section on — only the outline is shown/selectable"
             if checked else "Lasso section off"
         )
@@ -966,7 +910,7 @@ class SegFixWidget(QWidget):
         self.lasso_section_enable.setChecked(False)
         self._update_lasso_section_label()
         self._apply_visibility()
-        self.c.viewer.status = "Lasso section cleared"
+        self.c.view.status = "Lasso section cleared"
 
     def _update_lasso_section_label(self) -> None:
         mask = self._lasso_section_mask
@@ -1008,7 +952,7 @@ class SegFixWidget(QWidget):
         else:
             self.hidden_ids.discard(tid)
         self._apply_visibility()
-        self.c.viewer.status = f"Tree {tid} {'hidden' if hidden else 'shown'}"
+        self.c.view.status = f"Tree {tid} {'hidden' if hidden else 'shown'}"
 
     def _set_faded(self, tid: int, faded: bool) -> None:
         if faded:
@@ -1016,17 +960,17 @@ class SegFixWidget(QWidget):
         else:
             self.c.faded_ids.discard(tid)
         self._apply_transparency()
-        self.c.viewer.status = (
+        self.c.view.status = (
             f"Tree {tid} {'faded' if faded else 'back to full opacity'}"
         )
 
     def _apply_transparency(self) -> None:
-        """Re-colour the layer so trees in ``faded_ids`` render at
+        """Re-colour the cloud so trees in ``faded_ids`` render at
         FADED_ALPHA. Parallel to _apply_visibility, but for opacity — faded
         points stay shown and selectable."""
-        if self.c.layer is None or not len(self.c.layer.data):
+        if not len(self.c.view.coords):
             return
-        refresh_layer(self.c.layer, self.c.cloud, self.c.faded_ids)
+        refresh_view(self.c.view, self.c.cloud, self.c.faded_ids)
 
     def _mark_done(self, tid: int, done: bool) -> None:
         if done:
@@ -1044,7 +988,7 @@ class SegFixWidget(QWidget):
         path = self._save_progress()
         if self.on_done_changed is not None:
             self.on_done_changed()
-        self.c.viewer.status = (
+        self.c.view.status = (
             f"Tree {tid} marked {'done' if done else 'not done'}"
             + (f" — saved to {os.path.basename(path)}" if path else "")
         )
@@ -1079,7 +1023,7 @@ class SegFixWidget(QWidget):
                 data = json.load(f)
             self.done_ids = {int(t) for t in data.get("done", [])}
         except (OSError, ValueError) as exc:
-            self.c.viewer.status = f"Could not read progress file: {exc}"
+            self.c.view.status = f"Could not read progress file: {exc}"
 
     def _save_progress(self) -> str | None:
         """Write the done-tree set next to the source file; returns the path."""
@@ -1090,7 +1034,7 @@ class SegFixWidget(QWidget):
             with open(path, "w", encoding="utf-8") as f:
                 json.dump({"done": sorted(self.done_ids)}, f)
         except OSError as exc:
-            self.c.viewer.status = f"Could not save progress: {exc}"
+            self.c.view.status = f"Could not save progress: {exc}"
             return None
         return path
 
@@ -1099,12 +1043,10 @@ class SegFixWidget(QWidget):
         """Draw a wireframe bounding box around each given tree (or clear).
 
         Called on every current-tree change, so it no-ops when the set of
-        boxed trees is unchanged rather than rebuilding the layer.
+        boxed trees is unchanged rather than rebuilding.
         """
         ids = {int(t) for t in ids}
         if ids == self._bbox_ids or self._bbox_busy:
-            # Never rebuild re-entrantly: adding/removing the layer fires
-            # events (active-layer change → highlight) that call back in here.
             return
         self._bbox_busy = True
         try:
@@ -1114,10 +1056,7 @@ class SegFixWidget(QWidget):
 
     def _rebuild_tree_bbox(self, ids: set[int]) -> None:
         self._bbox_ids = ids
-        viewer = self.c.viewer
-        if self.BBOX_LAYER in viewer.layers:
-            viewer.layers.remove(self.BBOX_LAYER)
-        edges, colors = [], []
+        segments, colors = [], []
         for tid in ids:
             pts = self.c.cloud.coords[self.c.cloud.labels == tid]
             if not len(pts):
@@ -1136,18 +1075,17 @@ class SegFixWidget(QWidget):
                 for b in range(3):
                     if not i & (1 << b):
                         j = i | (1 << b)
-                        edges.append([corners[i], corners[j] - corners[i]])
+                        segments.append(corners[i])
+                        segments.append(corners[j])
                         colors.append(rgba)
-        if edges:
-            viewer.add_vectors(
-                np.asarray(edges, dtype=np.float32),
-                name=self.BBOX_LAYER,
-                edge_color=np.asarray(colors),
-                edge_width=0.03,
-                vector_style="line",
+                        colors.append(rgba)
+        if segments:
+            self.c.view.set_bbox(
+                np.asarray(segments, dtype=np.float32),
+                np.asarray(colors, dtype=np.float32),
             )
-            viewer.layers.selection.active = self.c.layer
-        self.c.lasso.reassert()  # layer add/remove re-enabled the camera
+        else:
+            self.c.view.clear_bbox()
 
     # -- selection info -----------------------------------------------
     def _update_selection(self) -> None:
@@ -1218,13 +1156,13 @@ class SegFixWidget(QWidget):
     def _require_selection(self) -> np.ndarray | None:
         idx = self.c.selected_indices()
         if idx.size == 0:
-            self.c.viewer.status = "Select points first (L for lasso)"
+            self.c.view.status = "Select points first (L for lasso)"
             return None
         return idx
 
     def _require_current(self) -> int | None:
         if self.current is None:
-            self.c.viewer.status = (
+            self.c.view.status = (
                 "No tree under review — press Space or click a table row"
             )
         return self.current
@@ -1272,7 +1210,7 @@ class SegFixWidget(QWidget):
         if idx.size:
             return idx
         if self.current is None:
-            self.c.viewer.status = (
+            self.c.view.status = (
                 f"Select points to {verb} (L), or pick a tree first"
             )
             return None
@@ -1295,60 +1233,63 @@ class SegFixWidget(QWidget):
     # -- save --------------------------------------------------------
     def on_save(self) -> None:
         if self.c.on_save_override is not None:
-            busy(self.c.viewer, "Saving…")
+            busy(self.c.view, "Saving…")
             try:
                 msg = self.c.on_save_override()
             except Exception as exc:
                 QMessageBox.critical(self, "Save failed", str(exc))
                 return
-            self.c.viewer.status = msg
+            self.c.view.status = msg
             self._save_progress()
             self._update_info()
             return
         if not self.c.save_path:
-            self.c.viewer.status = "Nothing loaded to save"
+            self.c.view.status = "Nothing loaded to save"
             return
         self._do_save(self.c.save_path)
 
     def _do_save(self, path: str) -> None:
         from . import io
 
-        busy(self.c.viewer, f"Saving to {path}…")
+        busy(self.c.view, f"Saving to {path}…")
         try:
             io.save(self.c.cloud, path)
         except Exception as exc:  # surface IO errors instead of crashing
             QMessageBox.critical(self, "Save failed", str(exc))
             return
         self._save_progress()
-        self.c.viewer.status = f"Saved → {path}"
+        self.c.view.status = f"Saved → {path}"
 
 
-def bind_shortcuts(viewer, panel: SegFixWidget) -> None:
+def bind_shortcuts(window, panel: SegFixWidget) -> None:
     """One-key bindings so the whole review loop stays on the canvas.
 
-    Bound at viewer level with overwrite so they win over napari defaults
-    (notably Ctrl+S, which napari uses for its own layer-save dialog).  Keys
-    that clash with Points-layer defaults (a, Space, Delete) are also bound
-    at layer level in ``_on_cloud_changed``.
+    Bound on the main window as ``QShortcut``s; ``WindowShortcut`` context so
+    they fire wherever focus sits in the window (canvas or a dock).
     """
+    from qtpy.QtGui import QKeySequence, QShortcut
+
     bindings = {
-        "l": lambda v: panel.lasso_btn.toggle(),
-        "Control-l": lambda v: panel.tree_lasso_btn.toggle(),
-        "Escape": lambda v: panel.on_move_mode(),
-        "Space": lambda v: panel.on_done_next(),
-        "Left": lambda v: panel._step(-1),
-        "Right": lambda v: panel._step(1),
-        "a": lambda v: panel.on_add(),
-        "n": lambda v: panel.on_create_new(),
-        "u": lambda v: panel.on_unassign(),
-        "x": lambda v: panel.on_noise(),
-        "h": lambda v: panel.show_unassigned.toggle(),
-        "c": lambda v: panel.cross_enable.toggle(),
-        "Shift-l": lambda v: panel.section_draw_btn.toggle(),
-        "Shift-c": lambda v: panel.lasso_section_enable.toggle(),
-        "Control-z": lambda v: panel.on_undo(),
-        "Control-Shift-z": lambda v: panel.on_redo(),
-        "Control-s": lambda v: panel.on_save(),
+        "L": panel.lasso_btn.toggle,
+        "Ctrl+L": panel.tree_lasso_btn.toggle,
+        "Esc": panel.on_move_mode,
+        "Space": panel.on_done_next,
+        "Left": lambda: panel._step(-1),
+        "Right": lambda: panel._step(1),
+        "A": panel.on_add,
+        "N": panel.on_create_new,
+        "U": panel.on_unassign,
+        "X": panel.on_noise,
+        "H": panel.show_unassigned.toggle,
+        "C": panel.cross_enable.toggle,
+        "Shift+L": panel.section_draw_btn.toggle,
+        "Shift+C": panel.lasso_section_enable.toggle,
+        "Ctrl+Z": panel.on_undo,
+        "Ctrl+Shift+Z": panel.on_redo,
+        "Ctrl+S": panel.on_save,
     }
+    panel._shortcuts = []  # keep refs alive
     for key, fn in bindings.items():
-        viewer.bind_key(key, fn, overwrite=True)
+        sc = QShortcut(QKeySequence(key), window)
+        sc.activated.connect(fn)
+        panel._shortcuts.append(sc)

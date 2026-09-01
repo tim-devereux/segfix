@@ -7,12 +7,14 @@ name = "segfix"
 version = "0.1.0"
 description = "GUI tool to fix instance segmentation of tree point clouds"
 readme = "README.md"
-requires-python = ">=3.10,<3.13"
+requires-python = ">=3.10"
 dependencies = [
-    # >=0.9: viewer._patch_napari_shown_in_full_3d reads _PointSliceRequest.shown,
-    # a field 0.8 does not have (and whose response kwarg 0.8 spells differently),
-    # so the app crashes on the first layer add under older napari.
-    "napari[all]>=0.9",
+    # The 3D canvas is vispy driven directly (see segfix.cloudview); PyQt6 is
+    # its Qt binding and qtpy is the thin compat layer the widgets import
+    # through.
+    "vispy>=0.14",
+    "PyQt6>=6.5",
+    "qtpy>=2.4",
     "numpy>=1.24",
     "plyfile>=1.0",
     "scipy>=1.10",

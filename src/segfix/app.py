@@ -130,13 +130,13 @@ def main(argv=None) -> int:
     )
     args = parser.parse_args(argv)
 
-    # Must import napari before any QApplication exists (including the one
-    # the startup dialog below would otherwise create first): napari applies
-    # a Wayland+NVIDIA OpenGL workaround at import time that only works if
-    # nothing has created a Qt application yet. Doing this out of order is a
-    # real, reproduced crash — the app launches but every draw call fails
-    # with "OpenGL.error.GLError: invalid enumerant" / "no valid context".
-    import napari
+    # vispy + PyQt6 on a Wayland session with the NVIDIA driver hits GLX
+    # context-creation failures; force the xcb (X11 / XWayland) platform
+    # plugin before any QApplication exists. Respect an explicit override.
+    import os
+
+    if sys.platform.startswith("linux"):
+        os.environ.setdefault("QT_QPA_PLATFORM", "xcb")
 
     from . import registry
     from .startup_ui import choose_project
@@ -148,7 +148,7 @@ def main(argv=None) -> int:
     args.cloud = open_path
     registry.add_entry(registry_path, kind=kind)
 
-    return _run_scene(napari, args)
+    return _run_scene(args)
 
 
 def _combined_panel(*widgets):
@@ -173,107 +173,84 @@ def _combined_panel(*widgets):
     return scroll
 
 
-def _dock_right(viewer, widget):
-    """Dock ``widget`` on the right, sized to fill the full window height.
+def _bare_dock(widget, title: str):
+    """A ``QDockWidget`` holding ``widget`` with no title bar and no
+    float/close buttons — a plain fixed panel, like napari's stripped docks."""
+    from qtpy.QtWidgets import QDockWidget, QWidget
 
-    ``QtViewerDockWidget.__init__`` (napari) unconditionally sets the docked
-    widget's vertical size policy to ``QSizePolicy.Maximum`` — capped at its
-    sizeHint, regardless of available space — independently of the
-    ``add_vertical_stretch`` option. That leaves a lone right-hand dock sized
-    to a fraction of the window, forcing users to scroll for content that
-    would otherwise fit. Override it to ``Expanding`` so the dock claims the
-    rest of the window height, then nudge it with the oversized-resizeDocks
-    idiom napari itself uses for its own layer-list dock at startup
-    (qt_main_window.py's ``_QtMainWindow.__init__``).
-    """
-    from qtpy.QtCore import Qt
-    from qtpy.QtWidgets import QSizePolicy
-
-    dock = viewer.window.add_dock_widget(widget, name="segfix", area="right")
-    policy = dock.widget().sizePolicy()
-    policy.setVerticalPolicy(QSizePolicy.Policy.Expanding)
-    dock.widget().setSizePolicy(policy)
-    viewer.window._qt_window.resizeDocks([dock], [10000], Qt.Orientation.Vertical)
-    # Qt's default corner ownership gives the top-right corner to the top
-    # dock area, which pushes the right dock's top edge down below it —
-    # leaving a gap of bare canvas in that corner. Give the corner to the
-    # right dock instead so it reaches all the way up to y=0.
-    viewer.window._qt_window.setCorner(
-        Qt.Corner.TopRightCorner, Qt.DockWidgetArea.RightDockWidgetArea
-    )
+    dock = QDockWidget(title)
+    dock.setObjectName(title)
+    dock.setTitleBarWidget(QWidget())  # empty widget → no visible title bar
+    dock.setFeatures(QDockWidget.DockWidgetFeature.NoDockWidgetFeatures)
+    dock.setWidget(widget)
     return dock
 
 
-def _dock_top(viewer, panel) -> None:
-    """Dock ``panel.top_bar`` (Interaction / View / Cross section) along the
-    top of the window — it's about the canvas/viewport, not the tree-review
-    workflow the main side panel is organised around."""
-    viewer.window.add_dock_widget(panel.top_bar, name="view", area="top")
-
-
-def _run_scene(napari, args) -> int:
-    """Default mode for a single big cloud (binary PLY or uncompressed LAS):
-    a tree table where picking a row loads that tree plus its neighbours,
-    instead of the whole cloud."""
+def _run_scene(args) -> int:
+    """Default (only) mode: a tree table where picking a row loads that tree
+    plus its spatial neighbours into the 3D view, instead of the whole cloud.
+    """
     import numpy as np
+    from qtpy.QtCore import Qt
+    from qtpy.QtWidgets import QApplication, QLabel, QMainWindow
 
+    from .cloudview import CloudView
+    from .icons import app_icon
     from .model import PointCloud
     from .scene_ui import SceneController, SceneWidget
     from .treecatalog import open_catalog
-    from .viewer import (
-        add_cloud_layer,
-        add_gpu_status_widget,
-        apply_cloudcompare_controls,
-        busy,
-        strip_ui,
-    )
+    from .viewer import busy, gpu_renderer_info
     from .widgets import SegFixController, SegFixWidget, bind_shortcuts
 
-    viewer = napari.Viewer(title=f"segfix — {args.cloud}")
-    from .icons import app_icon
+    app = QApplication.instance() or QApplication(sys.argv)
+    app.setWindowIcon(app_icon())
 
-    viewer.window._qt_window.setWindowIcon(app_icon())
-    viewer.window._qt_window.showMaximized()
-    # Before any loading: strip_ui/apply_cloudcompare_controls only touch
-    # napari's own built-in chrome (menu bar, default docks, camera), not
-    # anything of ours, so they're safe this early — and doing them now
-    # means the "busy" status repaint below (and the catalog scan) never
-    # flashes the default, unstripped napari GUI first.
-    apply_cloudcompare_controls(viewer)
-    strip_ui(viewer)
-    # An empty Points layer, added before any (potentially slow) loading:
-    # with zero layers, napari shows its own "drag a file here" welcome
-    # screen over the canvas — adding this one, even with no points yet,
-    # dismisses that so the busy status below isn't fighting it for
-    # attention.
+    win = QMainWindow()
+    win.setWindowTitle(f"segfix — {args.cloud}")
+    win.setWindowIcon(app_icon())
+
+    view = CloudView()
+    win.setCentralWidget(view.native)
+
+    status = win.statusBar()
+    view.on_status = status.showMessage
+    gpu = gpu_renderer_info()
+    gpu_label = QLabel(f"GPU: {gpu}" if gpu else "GPU: unknown")
+    gpu_label.setStyleSheet("color: gray; padding: 0 6px;")
+    status.addPermanentWidget(gpu_label)
+
     empty = PointCloud(
         coords=np.empty((0, 3), np.float32), labels=np.empty(0, np.int32)
     )
-    layer = add_cloud_layer(viewer, empty, point_size=args.point_size)
-    # After the first layer add, so the GL context exists to read a renderer
-    # string from (see gpu_renderer_info).
-    add_gpu_status_widget(viewer)
-    busy(viewer, f"Scanning trees in {args.cloud}…")
+    view.load_cloud(empty, point_size=args.point_size)
 
+    win.showMaximized()
+    busy(view, f"Scanning trees in {args.cloud}…")
     catalog = open_catalog(args.cloud, label_field=args.label_field)
 
-    seg = SegFixController(viewer, empty, layer)
+    seg = SegFixController(view, empty)
     panel = SegFixWidget(seg)
-    scene_ctrl = SceneController(viewer, catalog, seg, point_size=args.point_size)
+    scene_ctrl = SceneController(view, catalog, seg, point_size=args.point_size)
     scene_panel = SceneWidget(scene_ctrl)
     panel.on_done_changed = scene_panel.refresh
 
-    _dock_top(viewer, panel)
-    _dock_right(viewer, _combined_panel(scene_panel, panel))
+    top_dock = _bare_dock(panel.top_bar, "view")
+    win.addDockWidget(Qt.DockWidgetArea.TopDockWidgetArea, top_dock)
+    right_dock = _bare_dock(_combined_panel(scene_panel, panel), "segfix")
+    win.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, right_dock)
+    # Give the top-right corner to the right dock so it reaches y=0 instead
+    # of being pushed down below the top strip.
+    win.setCorner(
+        Qt.Corner.TopRightCorner, Qt.DockWidgetArea.RightDockWidgetArea
+    )
     panel.size_spin.setValue(args.point_size)
-    bind_shortcuts(viewer, panel)
+    bind_shortcuts(win, panel)
 
-    viewer.status = (
+    view.status = (
         f"{len(catalog.records)} trees in {args.cloud}. "
         "Double-click a tree to load it with neighbours."
     )
-    napari.run()
-    return 0
+    return app.exec()
 
 
 if __name__ == "__main__":

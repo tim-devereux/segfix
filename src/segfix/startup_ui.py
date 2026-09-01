@@ -152,7 +152,7 @@ class StartupDialog(QDialog):
 _app = None  # kept alive for the process's lifetime once created here — a
 # QApplication with no surviving Python reference gets garbage-collected
 # immediately (PyQt/PySide tear down the underlying app with it), which
-# crashes the very next QWidget construction, including napari's own.
+# crashes the very next QWidget construction.
 
 
 def choose_project() -> tuple[str, str, str] | None:
@@ -162,20 +162,19 @@ def choose_project() -> tuple[str, str, str] | None:
     and ``kind`` (see :func:`registry.add_entry`) — or ``None`` if the user
     cancelled without choosing anything.
 
-    ``napari`` must already be imported by the time this runs (see
-    ``app.py``'s comment) — its own ``get_qapp()`` applies a Wayland+NVIDIA
-    OpenGL workaround that has to happen before the first QApplication is
-    created, whether that's this dialog's or napari's own Viewer later.
+    Creates the process-wide ``QApplication`` (reused by the main window
+    afterwards). ``app.main`` has already pinned ``QT_QPA_PLATFORM`` by the
+    time this runs.
     """
     global _app
-    from napari.qt import get_qapp
+    import sys
+
+    from qtpy.QtWidgets import QApplication
 
     from .icons import app_icon
 
-    _app = get_qapp()
-    _app.setWindowIcon(app_icon())  # covers this dialog + every napari
-    # window after it that doesn't set its own — see app.py's Viewer calls
-    # for the belt-and-suspenders per-window override.
+    _app = QApplication.instance() or QApplication(sys.argv)
+    _app.setWindowIcon(app_icon())
     dialog = StartupDialog()
     if dialog.exec() == QDialog.Accepted and dialog.open_path:
         return dialog.open_path, dialog.registry_path, dialog.kind

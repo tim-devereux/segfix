@@ -25,7 +25,7 @@ from qtpy.QtWidgets import (
 )
 
 from .treecatalog import Catalog
-from .viewer import add_cloud_layer, busy
+from .viewer import busy
 
 DEFAULT_REACH = 1.0  # metres; matches SegFixWidget's own "reach" spinner default
 
@@ -33,9 +33,9 @@ DEFAULT_REACH = 1.0  # metres; matches SegFixWidget's own "reach" spinner defaul
 class SceneController:
     """Owns the catalog and the shared segfix editing controller."""
 
-    def __init__(self, viewer, catalog: Catalog, seg_controller,
+    def __init__(self, view, catalog: Catalog, seg_controller,
                  point_size: float = 0.01, reach: float = DEFAULT_REACH):
-        self.viewer = viewer
+        self.view = view
         self.catalog = catalog
         self.seg = seg_controller
         self.point_size = point_size
@@ -57,12 +57,9 @@ class SceneController:
         self.current_label = label
         self._global_idx = global_idx
 
-        if self.seg.layer is not None and self.seg.layer in self.viewer.layers:
-            self.viewer.layers.remove(self.seg.layer)
-
-        layer = add_cloud_layer(self.viewer, cloud, point_size=self.point_size)
-        self.seg.set_cloud(cloud, layer)
-        self.viewer.reset_view()
+        self.view.load_cloud(cloud, point_size=self.point_size)
+        self.seg.set_cloud(cloud)
+        self.view.reset_view()
         return (
             f"Loaded tree {label} + {len(neighbours)} neighbour(s); "
             f"{cloud.n_points:,} points"
@@ -168,8 +165,8 @@ class SceneWidget(QWidget):
     def on_load_tree(self) -> None:
         label = self._selected_label()
         if label is None:
-            self.c.viewer.status = "Select a tree row first"
+            self.c.view.status = "Select a tree row first"
             return
-        busy(self.c.viewer, f"Loading tree {label}…")
-        self.c.viewer.status = self.c.load_tree(label)
+        busy(self.c.view, f"Loading tree {label}…")
+        self.c.view.status = self.c.load_tree(label)
         self._populate()

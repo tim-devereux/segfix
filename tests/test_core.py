@@ -69,10 +69,10 @@ def test_last_changed_tracks_touched_indices():
     assert c.last_changed.size == 0
 
 
-def test_refresh_layer_incremental_matches_full_recompute():
+def test_refresh_view_incremental_matches_full_recompute():
     """The per-edit fast path (recolour only `changed` rows) must land on the
     exact same face_color array as a whole-cloud recompute."""
-    from segfix.viewer import colors_for_labels, refresh_layer
+    from segfix.viewer import colors_for_labels, refresh_view
 
     class _StubLayer:
         def __init__(self, n):
@@ -89,7 +89,7 @@ def test_refresh_layer_incremental_matches_full_recompute():
     cloud = PointCloud(coords=coords, labels=labels)
 
     layer = _StubLayer(cloud.n_points)
-    refresh_layer(layer, cloud)  # initial full paint
+    refresh_view(layer, cloud)  # initial full paint
     np.testing.assert_array_equal(
         layer.face_color, colors_for_labels(cloud.labels)
     )
@@ -100,17 +100,17 @@ def test_refresh_layer_incremental_matches_full_recompute():
         ops.reassign(
             cloud, rng.choice(400, 40, replace=False), int(rng.randint(1, 9))
         )
-        refresh_layer(layer, cloud, changed=cloud.last_changed)
+        refresh_view(layer, cloud, changed=cloud.last_changed)
         np.testing.assert_array_equal(
             layer.face_color, colors_for_labels(cloud.labels)
         )
     ops.create_new(cloud, rng.choice(400, 15, replace=False))  # brand-new id
-    refresh_layer(layer, cloud, changed=cloud.last_changed)
+    refresh_view(layer, cloud, changed=cloud.last_changed)
     np.testing.assert_array_equal(
         layer.face_color, colors_for_labels(cloud.labels)
     )
     cloud.undo()
-    refresh_layer(layer, cloud, changed=cloud.last_changed)
+    refresh_view(layer, cloud, changed=cloud.last_changed)
     np.testing.assert_array_equal(
         layer.face_color, colors_for_labels(cloud.labels)
     )
@@ -118,7 +118,7 @@ def test_refresh_layer_incremental_matches_full_recompute():
     # An empty `changed` (no-op edit) leaves the layer untouched.
     before = layer.face_color.copy()
     hits = layer._refreshed
-    refresh_layer(layer, cloud, changed=np.empty(0, np.int64))
+    refresh_view(layer, cloud, changed=np.empty(0, np.int64))
     np.testing.assert_array_equal(layer.face_color, before)
     assert layer._refreshed == hits
 
