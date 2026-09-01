@@ -132,8 +132,12 @@ class LassoTool:
 
     def _ensure_overlay(self):
         if self._overlay is None:
-            native = self.view.native
-            self._overlay = _LassoOverlay(native.parent() or native)
+            # Parent the overlay to the canvas widget itself, so its (0, 0)
+            # is the canvas' top-left — the same origin as the vispy mouse
+            # ``event.pos`` and the visual→canvas projection. Parenting it to
+            # an ancestor instead shifts the drawn outline by the height of
+            # whatever docks sit above the canvas.
+            self._overlay = _LassoOverlay(self.view.native)
         return self._overlay
 
     def set_armed(self, armed: bool) -> None:

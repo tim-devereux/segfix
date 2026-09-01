@@ -83,10 +83,14 @@ class CloudView:
             parent=self.view.scene, scaling="fixed", spherical=False
         )
         self.markers.antialias = 0.3
-        # 'opaque': depth-test on, blending off. The points are fully opaque,
-        # so a plain z-buffer is right — the default translucent blend makes
-        # thousands of overlapping points wash toward white.
-        self.markers.set_gl_state("opaque", depth_test=True, cull_face=False)
+        # Depth-tested alpha blending: opaque points (alpha 1) composite as a
+        # plain overwrite, but the panel's per-tree "fade" sets alpha to
+        # FADED_ALPHA and needs real blending to show. depth_test keeps the
+        # nearest point per pixel, so opaque points don't accumulate toward
+        # white the way a plain translucent-without-depth pass would.
+        self.markers.set_gl_state(
+            "translucent", depth_test=True, cull_face=False
+        )
         # A second marker set drawn on top: a translucent white halo on the
         # currently selected points (napari's Points layer did this itself).
         self.highlight = scene.visuals.Markers(
