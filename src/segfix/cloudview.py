@@ -28,28 +28,34 @@ class _CloudCompareCamera(TurntableCamera):
 
     vispy's turntable puts pan on Shift+left-drag and (a rougher) zoom on
     right-drag.  Rather than reimplement the orbit/pan maths, a plain
-    right-drag is presented to the base handler as the Shift+left-drag it
-    already pans with, then the event is put back.  Wheel zoom is untouched.
+    right-drag move is presented to the base handler as the Shift+left-drag
+    it already pans with, then the underlying event is put back.  Wheel zoom
+    and left-drag orbit are untouched.
     """
 
     def viewbox_mouse_event(self, event):
-        if event.type == "mouse_move" and event.press_event is not None:
-            buttons = event.buttons
-            mods = event.mouse_event.modifiers
-            if 2 in buttons and 1 not in buttons and not mods:
-                saved_buttons = list(event.mouse_event.buttons)
-                saved_press = list(event.mouse_event.press_event.buttons)
-                saved_mods = event.mouse_event.modifiers
-                event.mouse_event.buttons[:] = [1]
-                event.mouse_event.press_event.buttons[:] = [1]
-                event.mouse_event.modifiers = (keys.SHIFT,)
-                try:
-                    super().viewbox_mouse_event(event)
-                finally:
-                    event.mouse_event.buttons[:] = saved_buttons
-                    event.mouse_event.press_event.buttons[:] = saved_press
-                    event.mouse_event.modifiers = saved_mods
-                return
+        me = getattr(event, "mouse_event", None)
+        if (
+            me is not None
+            and event.type == "mouse_move"
+            and me.press_event is not None
+            and 2 in event.buttons
+            and 1 not in event.buttons
+            and not event.modifiers
+        ):
+            # ``MouseEvent.buttons`` is a plain list; ``modifiers`` is a
+            # read-only property backed by ``_modifiers``. Swap both, run the
+            # base pan, restore.
+            saved_buttons = list(me._buttons)
+            saved_mods = me._modifiers
+            me._buttons[:] = [1]
+            me._modifiers = (keys.SHIFT,)
+            try:
+                super().viewbox_mouse_event(event)
+            finally:
+                me._buttons[:] = saved_buttons
+                me._modifiers = saved_mods
+            return
         super().viewbox_mouse_event(event)
 
 
