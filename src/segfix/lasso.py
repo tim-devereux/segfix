@@ -340,8 +340,12 @@ class ClusterTool:
         else:
             seed = self.view.pick_point(xy)
             if seed is None:
-                self.view.status = "No point under the cursor"
+                # Clicked empty space — clear the selection (Shift-click on
+                # nothing just does nothing).
                 self._chain = None
+                if not additive:
+                    self.on_select(np.empty(0, dtype=np.int64), additive=False)
+                    self.view.status = "Selection cleared"
                 return
             level = 0
         indices = self.grow(seed, level)
