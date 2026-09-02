@@ -9,11 +9,13 @@ source file is never the thing being edited.
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from qtpy.QtCore import Qt
+from qtpy.QtCore import Qt, QTimer
 from qtpy.QtWidgets import (
     QAbstractItemView,
+    QApplication,
     QDialog,
     QFileDialog,
     QHBoxLayout,
@@ -25,7 +27,7 @@ from qtpy.QtWidgets import (
     QVBoxLayout,
 )
 
-from . import registry, workspace
+from . import registry, update, workspace
 
 _ICONS = {"workspace": "🗂", "file": "📄"}
 
@@ -60,6 +62,26 @@ class StartupDialog(QDialog):
         hint.setWordWrap(True)
         hint.setStyleSheet("color: gray;")
         layout.addWidget(hint)
+
+        # Update banner: hidden until the background check (below) finds the
+        # checkout is behind its upstream. Stays hidden entirely for anyone
+        # not running from a git clone (packaged some other way, or offline).
+        update_row = QHBoxLayout()
+        self.update_label = QLabel("")
+        self.update_label.setStyleSheet("color: #b8860b;")
+        self.update_label.hide()
+        update_row.addWidget(self.update_label, stretch=1)
+        self.update_btn = QPushButton("Update…")
+        self.update_btn.hide()
+        self.update_btn.clicked.connect(self._apply_update)
+        update_row.addWidget(self.update_btn)
+        layout.addLayout(update_row)
+        self._update_status: update.UpdateStatus | None = None
+        self._update_pool = ThreadPoolExecutor(max_workers=1)
+        self._update_future = self._update_pool.submit(update.check_for_update)
+        self._update_timer = QTimer(self)
+        self._update_timer.timeout.connect(self._poll_update_check)
+        self._update_timer.start(300)
 
         row = QHBoxLayout()
         new_btn = QPushButton("New Project…")
@@ -147,6 +169,58 @@ class StartupDialog(QDialog):
         self.registry_path = entry["path"]
         self.kind = kind
         self.accept()
+
+    def _poll_update_check(self) -> None:
+        if not self._update_future.done():
+            return
+        self._update_timer.stop()
+        status = self._update_future.result()
+        if status is None:
+            return
+        self._update_status = status
+        n = status.commits_behind
+        self.update_label.setText(
+            f"Update available ({n} commit{'s' if n != 1 else ''} behind)."
+        )
+        self.update_label.show()
+        self.update_btn.show()
+
+    def _apply_update(self) -> None:
+        # Blocking is deliberate: this only runs after an explicit click, a
+        # `git pull` + reinstall is normally a few seconds, and there's no
+        # meaningful "cancel a pull halfway through" to offer instead.
+        self.update_btn.setEnabled(False)
+        self.update_label.setText("Updating…")
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        QApplication.processEvents()
+        try:
+            update.apply_update(self._update_status.repo_root)
+        except Exception as exc:
+            QApplication.restoreOverrideCursor()
+            detail = exc.stderr if hasattr(exc, "stderr") and exc.stderr else str(exc)
+            QMessageBox.critical(self, "Update failed", detail)
+            self.update_btn.setEnabled(True)
+            self.update_label.setText(
+                f"Update available ({self._update_status.commits_behind} "
+                f"commit{'s' if self._update_status.commits_behind != 1 else ''} "
+                "behind)."
+            )
+            return
+        QApplication.restoreOverrideCursor()
+        self.update_label.setText("Updated — restart segfix to use it.")
+        self.update_btn.hide()
+        QMessageBox.information(
+            self, "Updated",
+            "segfix has been updated. Restart it to use the new version.",
+        )
+
+    def done(self, result) -> None:
+        # Overridden rather than closeEvent(): QDialog.accept()/reject() call
+        # done() directly without going through closeEvent, so that's the
+        # one hook that covers every way this dialog can close.
+        self._update_timer.stop()
+        self._update_pool.shutdown(wait=False, cancel_futures=True)
+        super().done(result)
 
 
 _app = None  # kept alive for the process's lifetime once created here — a
