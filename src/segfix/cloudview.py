@@ -120,7 +120,30 @@ class CloudView:
         #: fn() -> None, set by the panel to refresh its selection readout
         self.on_selection_changed = None
 
+        # Move mode: double-click a point to make it the camera's pivot, so
+        # orbiting turns around whatever you're looking at rather than the
+        # cloud's centroid.
+        self.canvas.events.mouse_double_click.connect(self._on_double_click)
+
         self._redraw()
+
+    def _on_double_click(self, event) -> None:
+        """Recentre the turntable on the double-clicked point (move mode only).
+
+        While the lasso/cluster tools are armed they lock the camera
+        (``interactive = False``); leave the pivot alone then so a stray
+        double-click during a selection doesn't lurch the view.
+        """
+        if getattr(event, "button", None) != 1:
+            return
+        if not self.view.camera.interactive:
+            return
+        idx = self.pick_point((float(event.pos[0]), float(event.pos[1])))
+        if idx is None:
+            return
+        self.view.camera.center = tuple(float(c) for c in self._coords[idx])
+        self.canvas.update()
+        self.status = "Rotation centre moved to the clicked point"
 
     # -- points ---------------------------------------------------------
     def load_cloud(self, cloud, point_size: float | None = None) -> None:
