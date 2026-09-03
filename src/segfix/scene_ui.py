@@ -13,6 +13,7 @@ import os
 
 import numpy as np
 from qtpy.QtCore import Qt
+from qtpy.QtGui import QBrush, QColor
 from qtpy.QtWidgets import (
     QAbstractItemView,
     QGroupBox,
@@ -28,6 +29,7 @@ from .treecatalog import Catalog
 from .viewer import busy
 
 DEFAULT_REACH = 1.0  # metres; matches SegFixWidget's own "reach" spinner default
+DONE_BG = QColor(35, 62, 42)  # green tint for finished rows; matches SegFixWidget
 
 
 class SceneController:
@@ -135,19 +137,25 @@ class SceneWidget(QWidget):
     def _populate(self) -> None:
         done = self._read_done()
         records = sorted(self.c.catalog.records.values(), key=lambda r: r.label)
+        total = len(records)
         n_done = sum(1 for rec in records if rec.label in done)
+        pct = round(100 * n_done / total) if total else 0
         self.path_label.setText(
-            f"{n_done}/{len(records)} trees done in "
+            f"{n_done}/{total} trees ({pct}%) done in "
             f"{os.path.basename(self.c.catalog.path)}"
         )
         self.table.setSortingEnabled(False)
-        self.table.setRowCount(len(records))
+        self.table.setRowCount(total)
+        done_brush = QBrush(DONE_BG)
         for row, rec in enumerate(records):
-            mark = "✓" if rec.label in done else ""
+            is_done = rec.label in done
+            mark = "✓" if is_done else ""
             for col, value in enumerate([rec.label, rec.count, mark]):
                 item = QTableWidgetItem()
                 item.setData(Qt.DisplayRole, value)
                 item.setData(Qt.UserRole, rec.label)
+                if is_done:
+                    item.setBackground(done_brush)
                 self.table.setItem(row, col, item)
         self.table.setSortingEnabled(True)
 

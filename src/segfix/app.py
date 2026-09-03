@@ -197,6 +197,7 @@ def _run_scene(args) -> int:
     from . import __version__
     from .cloudview import CloudView
     from .icons import app_icon
+    from .overlays import ScaleBarOverlay
     from .model import PointCloud
     from .scene_ui import SceneController, SceneWidget
     from .treecatalog import open_catalog
@@ -212,6 +213,10 @@ def _run_scene(args) -> int:
 
     view = CloudView()
     win.setCentralWidget(view.native)
+    # Scale bar + orientation axes over the canvas' bottom-left corner. Held
+    # on the window so it outlives this function; it also parents to the
+    # canvas widget, which keeps it alive regardless.
+    win._scale_overlay = ScaleBarOverlay(view)
 
     status = win.statusBar()
     view.on_status = status.showMessage

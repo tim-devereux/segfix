@@ -435,21 +435,25 @@ class SegFixWidget(QWidget):
         view.setSpacing(3)
         view_row = QHBoxLayout()
         view_row.setSpacing(6)
-        self.show_unassigned = QPushButton("Show unassigned (H)")
-        self.show_unassigned.setCheckable(True)
+        # A plain checkbox, like the Cross section / Lasso section "On"
+        # toggles it sits next to — not the odd-one-out checkable button it
+        # used to be.
+        self.show_unassigned = QCheckBox("Show unassigned (H)")
         self.show_unassigned.setChecked(True)
         self.show_unassigned.setToolTip(
             "Show or hide the unassigned + noise points"
-        )
-        self.show_unassigned.setStyleSheet(
-            "QPushButton:checked { background: #3a4450; font-weight: bold; }"
         )
         self.show_unassigned.toggled.connect(self._on_show_unassigned)
         view_row.addWidget(self.show_unassigned)
         self._button(view_row, "Hide others", self.on_hide_neighbours, "hide")
         self._button(view_row, "Fade others", self.on_fade_neighbours, "fade")
         view_row.addStretch(1)
-        view_row.addWidget(QLabel("Point size"))
+        view.addLayout(view_row)
+
+        top_bar_row.addWidget(view_box)
+
+        # Point size lives as a small floating control in the canvas' top-left
+        # corner (not in this bar) so it's next to the cloud it sizes.
         self.size_spin = QDoubleSpinBox()
         self.size_spin.setRange(0.5, 30.0)
         self.size_spin.setDecimals(1)
@@ -457,10 +461,7 @@ class SegFixWidget(QWidget):
         self.size_spin.setSuffix(" px")
         self.size_spin.setValue(3.0)
         self.size_spin.valueChanged.connect(self._on_point_size)
-        view_row.addWidget(self.size_spin)
-        view.addLayout(view_row)
-
-        top_bar_row.addWidget(view_box)
+        self._build_point_size_overlay()
 
         # -- cross section: an interactive slab along one axis; while on,
         # only points inside it are shown and selectable (folded into the
@@ -657,6 +658,27 @@ class SegFixWidget(QWidget):
     def _on_point_size(self, value: float) -> None:
         if len(self.c.view.coords):
             self.c.view.size = value
+
+    def _build_point_size_overlay(self) -> None:
+        """Float the point-size spinner over the canvas' top-left corner."""
+        native = self.c.view.native
+        box = QWidget(native)
+        box.setObjectName("pointSizeOverlay")
+        box.setStyleSheet(
+            "QWidget#pointSizeOverlay { background: rgba(30, 30, 30, 190); "
+            "border-radius: 5px; } "
+            "QWidget#pointSizeOverlay QLabel { color: #e8e8e8; }"
+        )
+        row = QHBoxLayout(box)
+        row.setContentsMargins(6, 4, 6, 4)
+        row.setSpacing(4)
+        row.addWidget(QLabel("Point size"))
+        row.addWidget(self.size_spin)
+        box.adjustSize()
+        box.move(10, 10)
+        box.show()
+        box.raise_()
+        self._point_size_overlay = box
 
     def on_toggle_lasso(self, checked: bool) -> None:
         self.c.lasso.set_armed(checked)
@@ -1198,7 +1220,11 @@ class SegFixWidget(QWidget):
             1 for row in range(n) if self._row_id(row) in self.done_ids
         )
         title = "Selected Tree + Neighbours"
-        self.trees_box.setTitle(f"{title} — {done}/{n} done" if n else title)
+        if n:
+            pct = round(100 * done / n)
+            self.trees_box.setTitle(f"{title} — {done}/{n} ({pct}%) done")
+        else:
+            self.trees_box.setTitle(title)
 
     def _progress_path(self) -> str | None:
         src = self.c.cloud.source_path or self.c.save_path
