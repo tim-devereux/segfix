@@ -570,8 +570,25 @@ class SegFixWidget(QWidget):
 
         top_bar_row.addStretch()
 
-        # -- fixing the current tree ----------------------------------
-        sel_box = QGroupBox("Current tree")
+        # -- fixing the current tree --------------------------------------
+        # This box floats over the 3D view as a column pinned to its right
+        # edge (parented to the canvas, not stacked in the side panel), so
+        # the fix actions sit next to the points they act on. Positioned by
+        # _position_current_tree_overlay, kept pinned on canvas resize.
+        sel_box = QGroupBox("Current tree", self.c.view.native)
+        sel_box.setObjectName("currentTreeOverlay")
+        sel_box.setStyleSheet(
+            "QGroupBox#currentTreeOverlay {"
+            " background: rgba(28, 28, 30, 210);"
+            " border: 1px solid rgba(255, 255, 255, 45);"
+            " border-radius: 6px; margin-top: 8px; }"
+            "QGroupBox#currentTreeOverlay::title {"
+            " subcontrol-origin: margin; left: 8px; padding: 0 4px;"
+            " color: #d0d0d0; }"
+            "QGroupBox#currentTreeOverlay QLabel { color: #e8e8e8; }"
+        )
+        sel_box.setFixedWidth(250)
+        self._current_tree_overlay = sel_box
         sel = QVBoxLayout(sel_box)
         sel.setSpacing(3)
         crow = QHBoxLayout()
@@ -617,7 +634,12 @@ class SegFixWidget(QWidget):
         self._button(sel, "Split off as new tree (N)", self.on_create_new, "new")
         self._button(sel, "Unassign (U)", self.on_unassign, "unassign")
         self._button(sel, "Noise (X)", self.on_noise, "noise")
-        layout.addWidget(sel_box)
+        sel_box.show()
+        sel_box.raise_()
+        self._position_current_tree_overlay()
+        self.c.view.canvas.events.resize.connect(
+            self._position_current_tree_overlay
+        )
 
         # Undo / Redo / Save Project used to live in a "Session" group box
         # here; they're on the window menu bar now (see app._build_menus),
@@ -678,6 +700,19 @@ class SegFixWidget(QWidget):
         box.show()
         box.raise_()
         self._point_size_overlay = box
+
+    def _position_current_tree_overlay(self, *_event) -> None:
+        """Pin the "Current tree" box to the canvas' right edge, top-aligned,
+        re-fitting its height to the content (the neighbour buttons come and
+        go). Also the vispy resize-event handler."""
+        box = getattr(self, "_current_tree_overlay", None)
+        if box is None:
+            return
+        box.adjustSize()
+        native = self.c.view.native
+        margin = 10
+        x = max(margin, native.width() - box.width() - margin)
+        box.move(x, margin)
 
     def on_toggle_lasso(self, checked: bool) -> None:
         self.c.lasso.set_armed(checked)
@@ -1359,6 +1394,7 @@ class SegFixWidget(QWidget):
                 w.deleteLater()
         if self.current is None:
             self.neighbour_label.setVisible(False)
+            self._position_current_tree_overlay()  # box shrinks back
             return
         from . import analysis
 
@@ -1385,6 +1421,7 @@ class SegFixWidget(QWidget):
                 lambda _checked=False, n=nid: self.on_send_to_neighbour(n)
             )
             self.neighbour_row.addWidget(btn)
+        self._position_current_tree_overlay()  # re-fit height to the new rows
 
     def _require_selection(self) -> np.ndarray | None:
         idx = self.c.selected_indices()
