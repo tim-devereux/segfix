@@ -224,7 +224,12 @@ def _open_project(win, panel) -> None:
 
 def _build_menus(win, panel) -> None:
     """Window menu bar: File (open/save the project), Edit (undo/redo — the
-    former "Session" panel box), Help (about)."""
+    former "Session" panel box), Preferences (colour theme), Help (about)."""
+    from qtpy.QtGui import QActionGroup
+    from qtpy.QtWidgets import QApplication
+
+    from . import theme
+
     bar = win.menuBar()
 
     file_menu = bar.addMenu("&File")
@@ -242,6 +247,19 @@ def _build_menus(win, panel) -> None:
     redo_act = edit_menu.addAction("Redo")
     redo_act.setShortcut("Ctrl+Shift+Z")
     redo_act.triggered.connect(panel.on_redo)
+
+    pref_menu = bar.addMenu("&Preferences")
+    theme_menu = pref_menu.addMenu("Theme")
+    theme_group = QActionGroup(win)
+    theme_group.setExclusive(True)
+    for label, mode in (("Light", "light"), ("Dark", "dark")):
+        act = theme_menu.addAction(label)
+        act.setCheckable(True)
+        act.setChecked(theme.current() == mode)
+        theme_group.addAction(act)
+        act.triggered.connect(
+            lambda _checked, m=mode: theme.set_mode(QApplication.instance(), m)
+        )
 
     help_menu = bar.addMenu("&Help")
     about_act = help_menu.addAction("About segfix")
@@ -291,6 +309,7 @@ def _run_scene(args) -> int:
     from qtpy.QtCore import Qt
     from qtpy.QtWidgets import QApplication, QLabel, QMainWindow
 
+    from . import theme
     from .cloudview import CloudView
     from .icons import app_icon
     from .overlays import ScaleBarOverlay
@@ -303,6 +322,7 @@ def _run_scene(args) -> int:
 
     app = QApplication.instance() or QApplication(sys.argv)
     app.setWindowIcon(app_icon())
+    theme.apply(app)  # saved light/dark palette (Preferences ▸ Theme)
 
     win = QMainWindow()
 
@@ -322,6 +342,8 @@ def _run_scene(args) -> int:
 
     view = CloudView()
     win.setCentralWidget(view.native)
+    # Canvas clear colour follows the theme (points stay readable on either).
+    theme.subscribe(lambda mode: view.set_background(theme.CANVAS_BG[mode]))
     # Scale bar + orientation axes over the canvas' bottom-left corner. Held
     # on the window so it outlives this function; it also parents to the
     # canvas widget, which keeps it alive regardless.

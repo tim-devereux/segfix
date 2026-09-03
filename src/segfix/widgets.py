@@ -36,6 +36,7 @@ from qtpy.QtWidgets import (
 )
 
 from . import operations as ops
+from . import theme
 from .icons import icon
 from .lasso import ClusterTool, LassoTool
 from .model import NOISE, UNASSIGNED, PointCloud
@@ -577,17 +578,7 @@ class SegFixWidget(QWidget):
         # _position_current_tree_overlay, kept pinned on canvas resize.
         sel_box = QGroupBox("Current tree", self.c.view.native)
         sel_box.setObjectName("currentTreeOverlay")
-        sel_box.setStyleSheet(
-            "QGroupBox#currentTreeOverlay {"
-            " background: rgba(28, 28, 30, 210);"
-            " border: 1px solid rgba(255, 255, 255, 45);"
-            " border-radius: 6px; margin-top: 8px; }"
-            "QGroupBox#currentTreeOverlay::title {"
-            " subcontrol-origin: margin; left: 8px; padding: 0 4px;"
-            " color: #d0d0d0; }"
-            "QGroupBox#currentTreeOverlay QLabel { color: #e8e8e8; }"
-        )
-        sel_box.setFixedWidth(250)
+        sel_box.setFixedWidth(250)  # styled by _apply_overlay_theme
         self._current_tree_overlay = sel_box
         sel = QVBoxLayout(sel_box)
         sel.setSpacing(3)
@@ -646,9 +637,36 @@ class SegFixWidget(QWidget):
         # driven by the same on_undo / on_redo / on_save methods.
 
         layout.addStretch()
+        # Style the two canvas overlays for the current theme and restyle
+        # them whenever it changes (their backing/text can't ride the Qt
+        # palette — they're translucent panels over the 3-D view).
+        theme.subscribe(self._apply_overlay_theme)
         self._on_cloud_changed()
 
     # -- helpers -----------------------------------------------------
+    def _apply_overlay_theme(self, mode: str) -> None:
+        col = theme.panel_colors(mode)
+        ps = getattr(self, "_point_size_overlay", None)
+        if ps is not None:
+            ps.setStyleSheet(
+                "QWidget#pointSizeOverlay { background: " + col["bg"]
+                + "; border-radius: 5px; } "
+                "QWidget#pointSizeOverlay QLabel { color: " + col["text"] + "; }"
+            )
+        ct = getattr(self, "_current_tree_overlay", None)
+        if ct is not None:
+            ct.setStyleSheet(
+                "QGroupBox#currentTreeOverlay {"
+                " background: " + col["bg"] + ";"
+                " border: 1px solid " + col["border"] + ";"
+                " border-radius: 6px; margin-top: 8px; }"
+                "QGroupBox#currentTreeOverlay::title {"
+                " subcontrol-origin: margin; left: 8px; padding: 0 4px;"
+                " color: " + col["subtext"] + "; }"
+                "QGroupBox#currentTreeOverlay QLabel { color: "
+                + col["text"] + "; }"
+            )
+
     def _button(self, parent_layout, text, slot, icon_name=None) -> None:
         btn = QPushButton(text)
         if icon_name:
@@ -684,12 +702,7 @@ class SegFixWidget(QWidget):
         """Float the point-size spinner over the canvas' top-left corner."""
         native = self.c.view.native
         box = QWidget(native)
-        box.setObjectName("pointSizeOverlay")
-        box.setStyleSheet(
-            "QWidget#pointSizeOverlay { background: rgba(30, 30, 30, 190); "
-            "border-radius: 5px; } "
-            "QWidget#pointSizeOverlay QLabel { color: #e8e8e8; }"
-        )
+        box.setObjectName("pointSizeOverlay")  # styled by _apply_overlay_theme
         row = QHBoxLayout(box)
         row.setContentsMargins(6, 4, 6, 4)
         row.setSpacing(4)

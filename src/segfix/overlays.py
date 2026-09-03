@@ -15,6 +15,8 @@ from qtpy.QtCore import QPointF, QRectF, Qt
 from qtpy.QtGui import QColor, QFont, QPainter, QPen
 from qtpy.QtWidgets import QWidget
 
+from . import theme
+
 _AXIS_COLORS = (QColor("#e08080"), QColor("#86c98a"), QColor("#7fb3e0"))
 _AXIS_LABELS = ("X", "Y", "Z")
 
@@ -37,14 +39,20 @@ class ScaleBarOverlay(QWidget):
     def __init__(self, view):
         super().__init__(view.native)
         self._view = view
+        self._ink = theme.canvas_ink()
         self.setAttribute(Qt.WA_TransparentForMouseEvents)
         self.setAttribute(Qt.WA_NoSystemBackground)
         self.setAttribute(Qt.WA_TranslucentBackground)
         self._sync_geometry()
         view.canvas.events.resize.connect(lambda _e=None: self._sync_geometry())
         view.canvas.events.draw.connect(lambda _e=None: self.update())
+        theme.subscribe(self._on_theme)
         self.show()
         self.raise_()
+
+    def _on_theme(self, mode: str) -> None:
+        self._ink = theme.canvas_ink(mode)
+        self.update()
 
     def _sync_geometry(self) -> None:
         n = self._view.native
@@ -147,7 +155,7 @@ class ScaleBarOverlay(QWidget):
         if length_m <= 0:
             return
         px = length_m / mpp
-        pen = QPen(QColor("#e8e8e8"))
+        pen = QPen(self._ink)
         pen.setWidthF(2.0)
         painter.setPen(pen)
         painter.drawLine(QPointF(x, y), QPointF(x + px, y))

@@ -270,6 +270,12 @@ class CloudView:
         self.bbox.visible = False
         self.canvas.update()
 
+    # -- appearance ---------------------------------------------------
+    def set_background(self, color: str) -> None:
+        """Swap the canvas clear colour (the light/dark theme drives this)."""
+        self.canvas.bgcolor = color
+        self.canvas.update()
+
     # -- camera --------------------------------------------------------
     def reset_view(self) -> None:
         if not len(self._coords):

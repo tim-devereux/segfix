@@ -245,10 +245,12 @@ def choose_project() -> tuple[str, str, str] | None:
 
     from qtpy.QtWidgets import QApplication
 
+    from . import theme
     from .icons import app_icon
 
     _app = QApplication.instance() or QApplication(sys.argv)
     _app.setWindowIcon(app_icon())
+    theme.apply(_app)  # so the picker matches the saved light/dark choice
     dialog = StartupDialog()
     if dialog.exec() == QDialog.Accepted and dialog.open_path:
         return dialog.open_path, dialog.registry_path, dialog.kind
