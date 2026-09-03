@@ -123,8 +123,7 @@ recentre the orbit on it. A metric scale bar and an X/Y/Z orientation tripod
 sit in the bottom-left of the view; the **point size** spinner floats in the
 top-left.
 
-The right-hand panel holds two tables in a **draggable vertical splitter**
-(opens at roughly 25 % / 75 %). **All Trees** (top) lists every tree in the
+The right-hand panel holds two tables. **All Trees** (top) lists every tree in the
 file — a Done column (`✓` when reviewed), tree ID and point count, with a
 running `N/M trees (X %) done` line above it — **double-click a row** to load
 that
