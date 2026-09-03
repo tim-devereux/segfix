@@ -198,7 +198,6 @@ class SegFixController:
 class SegFixWidget(QWidget):
     """The dock panel: the tree queue plus the few ops the loop needs."""
 
-    DONE_BG = QColor(35, 62, 42)  # green tint marking finished rows
     HIDE_COL = 3
     FADE_COL = 4
     OVERLAY_W = 280  # fixed width of the "Current tree" box floating on the view
@@ -289,7 +288,9 @@ class SegFixWidget(QWidget):
         # its on/off toggle inside, so switching one never resizes the bar.
         self.top_bar = QWidget()
         top_bar_row = QHBoxLayout(self.top_bar)
-        top_bar_row.setContentsMargins(0, 0, 0, 0)
+        # Left/right buffer so the first group's border/title isn't jammed
+        # against the window edge.
+        top_bar_row.setContentsMargins(10, 0, 6, 0)
         top_bar_row.setSpacing(6)
 
         # The top bar is a single thin strip: every group is one content row,
@@ -628,6 +629,13 @@ class SegFixWidget(QWidget):
                 "QScrollArea#neighbourScroll > QWidget > QWidget "
                 "{ background: transparent; }"
             )
+        # Re-tint the "done" rows for the new theme (dark vs pale green).
+        tt = getattr(self, "tree_table", None)
+        if tt is not None:
+            tt.blockSignals(True)
+            for row in range(tt.rowCount()):
+                self._style_done_row(row, self._row_id(row) in self.done_ids)
+            tt.blockSignals(False)
 
     def _button(self, parent_layout, text, slot, icon_name=None) -> None:
         btn = QPushButton(text)
@@ -1225,7 +1233,7 @@ class SegFixWidget(QWidget):
         )
 
     def _style_done_row(self, row: int, done: bool) -> None:
-        brush = QBrush(self.DONE_BG) if done else QBrush()
+        brush = QBrush(theme.done_row_bg()) if done else QBrush()
         for col in range(self.tree_table.columnCount()):
             it = self.tree_table.item(row, col)
             if it is not None:

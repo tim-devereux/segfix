@@ -160,19 +160,51 @@ def main(argv=None) -> int:
     return _run_scene(args)
 
 
+def _read_license() -> str | None:
+    """The MIT licence text — from the repo checkout segfix runs from, or
+    the installed distribution's metadata. ``None`` if neither is found."""
+    from pathlib import Path
+
+    here = Path(__file__).resolve()
+    for cand in (here.parents[2] / "LICENSE", here.parent / "LICENSE"):
+        try:
+            return cand.read_text(encoding="utf-8")
+        except OSError:
+            continue
+    try:
+        from importlib.metadata import files
+
+        for f in files("segfix") or []:
+            if Path(f.name).name in ("LICENSE", "LICENSE.txt", "COPYING"):
+                return f.read_text()
+    except Exception:
+        pass
+    return None
+
+
 def _about(parent) -> None:
+    from qtpy.QtCore import Qt
     from qtpy.QtWidgets import QMessageBox
 
+    from .icons import app_icon
     from .update import display_version
 
-    QMessageBox.about(
-        parent,
-        "About segfix",
+    box = QMessageBox(parent)
+    box.setWindowTitle("About segfix")
+    box.setTextFormat(Qt.TextFormat.RichText)
+    box.setIconPixmap(app_icon().pixmap(64, 64))
+    box.setText(
         f"<b>segfix {display_version()}</b>"
         "<p>GUI tool to fix instance segmentation of tree point clouds.</p>"
-        "<p><a href='https://github.com/tim-devereux/segfix'>"
-        "github.com/tim-devereux/segfix</a></p>",
+        "<p>MIT Licence&nbsp;&nbsp;·&nbsp;&nbsp;© 2026 Tim Devereux<br>"
+        "<a href='https://github.com/tim-devereux/segfix'>"
+        "github.com/tim-devereux/segfix</a></p>"
     )
+    licence = _read_license()
+    if licence:
+        box.setInformativeText("Full licence text under “Show Details”.")
+        box.setDetailedText(licence)
+    box.exec()
 
 
 def _open_project(win, panel) -> None:

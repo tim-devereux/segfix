@@ -13,7 +13,7 @@ import os
 
 import numpy as np
 from qtpy.QtCore import Qt
-from qtpy.QtGui import QBrush, QColor
+from qtpy.QtGui import QBrush
 from qtpy.QtWidgets import (
     QAbstractItemView,
     QGroupBox,
@@ -25,11 +25,11 @@ from qtpy.QtWidgets import (
     QWidget,
 )
 
+from . import theme
 from .treecatalog import Catalog
 from .viewer import busy
 
 DEFAULT_REACH = 1.0  # metres; matches SegFixWidget's own "reach" spinner default
-DONE_BG = QColor(35, 62, 42)  # green tint for finished rows; matches SegFixWidget
 
 
 class SceneController:
@@ -118,7 +118,9 @@ class SceneWidget(QWidget):
         layout.addWidget(self.trees_box)
 
         controller.on_saved = self._populate
-        self._populate()
+        # re-tint the "done" rows when the colour theme changes (also runs
+        # _populate once now)
+        theme.subscribe(lambda _mode: self._populate())
 
     def _read_done(self) -> set[int]:
         """Reuse SegFixWidget's own progress sidecar (keyed by source path,
@@ -146,7 +148,7 @@ class SceneWidget(QWidget):
         )
         self.table.setSortingEnabled(False)
         self.table.setRowCount(total)
-        done_brush = QBrush(DONE_BG)
+        done_brush = QBrush(theme.done_row_bg())
         for row, rec in enumerate(records):
             is_done = rec.label in done
             mark = "✓" if is_done else ""

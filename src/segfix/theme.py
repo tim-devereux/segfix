@@ -106,6 +106,13 @@ def canvas_ink(mode: str | None = None) -> QColor:
     return QColor("#202020" if (mode or _mode) == "light" else "#e8e8e8")
 
 
+def done_row_bg(mode: str | None = None) -> QColor:
+    """Table-row tint marking a reviewed tree — a dark green on the dark
+    theme, a pale green on the light one, each readable behind that theme's
+    text colour."""
+    return QColor("#233e2a" if (mode or _mode) == "dark" else "#c8e8c8")
+
+
 # -- state / application ----------------------------------------------
 def current() -> str:
     return _mode
