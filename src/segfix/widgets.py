@@ -125,8 +125,6 @@ class _FlowLayout(QLayout):
 class SegFixController:
     """Holds the editable cloud + the 3D view, and applies operations."""
 
-    DEFAULT_CLUSTER_GAP_FACTOR = 2.0  # cluster-grow reach = this × point spacing
-
     def __init__(self, view, cloud: PointCloud):
         self.view = view
         self.cloud = cloud
@@ -150,18 +148,12 @@ class SegFixController:
         # a completed lasso is redirected here instead of becoming the
         # selection — see _on_lasso. Also a mode choice, not per-cloud state.
         self.on_lasso_section = None
-        # Cluster-tool sensitivity: a level-0 click grows a blob reaching
-        # ``cluster_gap_factor`` × the cloud's point spacing per hop. Higher =
-        # looser (bridges bigger gaps, spills across tree boundaries); lower =
-        # a tight local lump. Exposed as the panel's "gap ×" spinner.
-        self.cluster_gap_factor: float = self.DEFAULT_CLUSTER_GAP_FACTOR
-        # Cluster caches for the current point array, dropped in set_cloud:
-        # the sampled point spacing, the derived per-hop reach (also dropped
-        # when the factor changes), and a KD-tree over every loaded point for
-        # the flood fill.
-        self._point_spacing: float | None = None
+        # Cluster-tool caches, all keyed to the current point array and
+        # dropped in set_cloud: the gap distance, and per-tree connected-
+        # component labellings (built once per tree the first time it's
+        # clicked).
         self._cluster_gap: float | None = None
-        self._cluster_tree = None
+        self._cluster_cc: dict[int, tuple] = {}
         self.lasso = LassoTool(view, self._on_lasso)
         self.cluster = ClusterTool(view, self._grow_cluster, self._on_cluster)
 
@@ -171,11 +163,7 @@ class SegFixController:
         was_lasso, was_cluster = self.lasso.armed, self.cluster.armed
         self.lasso.set_armed(False)
         self.cluster.set_armed(False)
-        # caches for the old points (the factor itself is a mode choice and
-        # survives the reload)
-        self._point_spacing = None
-        self._cluster_gap = None
-        self._cluster_tree = None
+        self._cluster_gap, self._cluster_cc = None, {}  # for the old points
         self.cloud = cloud
         self.save_path = cloud.source_path
         self.faded_ids = set()  # a fresh cloud starts with nothing faded
@@ -197,52 +185,48 @@ class SegFixController:
         self.view.selected = current
         self.view.status = f"Lasso selected {len(current)} points"
 
-    def set_cluster_gap_factor(self, factor: float) -> None:
-        """Change the cluster tool's sensitivity (per-hop reach = ``factor`` ×
-        point spacing). Drops the derived reach; the point spacing and the
-        KD-tree are gap-independent and kept, so it retunes without
-        resampling or rebuilding."""
-        self.cluster_gap_factor = max(float(factor), 0.1)
-        self._cluster_gap = None
+    def _cluster_component(self, seed_label: int, gap: float):
+        """(sorted point indices, component-id per index) for one tree's
+        ``gap``-connected blobs — computed once per tree, then cached."""
+        from . import analysis
 
-    def _cluster_kdtree(self):
-        from scipy.spatial import cKDTree
-
-        if self._cluster_tree is None:
-            self._cluster_tree = cKDTree(
-                np.ascontiguousarray(self.view.coords, dtype=np.float64)
+        cached = self._cluster_cc.get(seed_label)
+        if cached is None:
+            same = np.flatnonzero(self.cloud.labels == seed_label)
+            comp = (
+                analysis.connected_components_within(self.view.coords[same], gap)
+                if same.size else np.empty(0, np.int64)
             )
-        return self._cluster_tree
+            cached = (same, comp)
+            self._cluster_cc[seed_label] = cached
+        return cached
 
     def _grow_cluster(self, seed: int, level: int = 0) -> np.ndarray:
         """The cluster tool's payload for click number ``level`` of a
         sequence (see :class:`~segfix.lasso.ClusterTool`):
 
-        - 0: the connected blob around the click — points reachable by hops
-          of the "gap ×" reach, crossing tree boundaries and into unassigned
-          points where they physically touch.
-        - 1: that blob plus the whole of the seed's tree.
-        - 2+: the above plus ``level - 1`` rings of trees it touches.
+        - 0: the connected blob of the seed's own tree around the click.
+        - 1: the whole of the seed's tree (connected or not).
+        - 2+: the tree plus ``level - 1`` rings of trees it touches.
 
-        Each level is a superset of the last; the result is intersected with
-        what's currently shown.
+        Everything is intersected with what's currently shown.
         """
         from . import analysis
 
         labels = self.cloud.labels
         seed_lbl = int(labels[seed])
         if self._cluster_gap is None:
-            if self._point_spacing is None:
-                self._point_spacing = analysis.point_spacing(self.view.coords)
-            self._cluster_gap = self._point_spacing * self.cluster_gap_factor
+            self._cluster_gap = analysis.point_spacing(self.view.coords) * 4.0
 
-        blob = analysis.connected_blob(
-            self.view.coords, seed, self._cluster_gap, tree=self._cluster_kdtree()
-        )
         if level == 0:
-            idx = blob
+            same, comp = self._cluster_component(seed_lbl, self._cluster_gap)
+            if same.size <= 1:
+                idx = same
+            else:
+                local = int(np.searchsorted(same, seed))
+                idx = same[comp == comp[local]]
         elif level == 1:
-            idx = np.union1d(blob, np.flatnonzero(labels == seed_lbl))
+            idx = np.flatnonzero(labels == seed_lbl)
         else:
             grown = {seed_lbl}
             for _ in range(level - 1):
@@ -254,7 +238,7 @@ class SegFixController:
                 if ring <= grown:
                     break
                 grown |= ring
-            idx = np.union1d(blob, np.flatnonzero(np.isin(labels, list(grown))))
+            idx = np.flatnonzero(np.isin(labels, list(grown)))
 
         shown = np.asarray(self.view.shown, dtype=bool)
         if shown.shape[0] == len(labels):
@@ -421,31 +405,13 @@ class SegFixWidget(QWidget):
         self.cluster_btn.setIconSize(QSize(18, 18))
         self.cluster_btn.setCheckable(True)
         self.cluster_btn.setToolTip(
-            "Click a point to select the physically connected patch around it "
-            "(a spatial region grow) — e.g. to grab an over-segmented "
-            "fragment or a wrongly-attached limb. The 'gap ×' box sets its "
-            "reach. Click again in the same spot to grow: whole tree, then "
-            "its neighbours. Shift-click adds to the selection."
+            "Click a point to select the connected patch of the SAME tree's "
+            "points around it (a spatial region grow) — e.g. to grab an "
+            "over-segmented fragment or a wrongly-attached limb. Shift-click "
+            "adds to the selection."
         )
         self.cluster_btn.toggled.connect(self.on_toggle_cluster)
         interaction.addWidget(self.cluster_btn)
-        # Cluster sensitivity: the per-hop reach of the region grow, as a
-        # multiple of the cloud's point spacing (so it's scale-free).
-        self.cluster_gap_spin = QDoubleSpinBox()
-        self.cluster_gap_spin.setRange(0.5, 6.0)
-        self.cluster_gap_spin.setDecimals(1)
-        self.cluster_gap_spin.setSingleStep(0.5)
-        self.cluster_gap_spin.setPrefix("gap ×")
-        self.cluster_gap_spin.setValue(self.c.cluster_gap_factor)
-        self.cluster_gap_spin.setToolTip(
-            "Cluster tool sensitivity — how far a click grows, as a multiple "
-            "of the point spacing. Low: a tight local lump of what you "
-            "clicked. High: the whole connected blob, spilling across tree "
-            "boundaries and into unassigned points where they touch. Takes "
-            "effect on the next cluster click."
-        )
-        self.cluster_gap_spin.valueChanged.connect(self._on_cluster_gap_changed)
-        interaction.addWidget(self.cluster_gap_spin)
         interaction.addStretch(1)
         # Each mode button lights up in its own colour while active.
         for btn, bg, fg in (
@@ -747,13 +713,6 @@ class SegFixWidget(QWidget):
                 )
         else:
             self.move_btn.setChecked(True)
-
-    def _on_cluster_gap_changed(self, value: float) -> None:
-        self.c.set_cluster_gap_factor(value)
-        self.c.view.status = (
-            f"Cluster gap set to ×{value:g} point spacing "
-            "— applies on the next cluster click"
-        )
 
     def on_toggle_cluster(self, checked: bool) -> None:
         """Arm/disarm the click-to-select-a-connected-patch tool."""

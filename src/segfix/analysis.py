@@ -63,42 +63,6 @@ def connected_components_within(coords: np.ndarray, eps: float) -> np.ndarray:
     return comp
 
 
-def connected_blob(
-    coords: np.ndarray, seed: int, eps: float, tree=None, cap: int = 400_000
-) -> np.ndarray:
-    """Indices of the points reachable from ``coords[seed]`` by hops of at
-    most ``eps`` — one physically continuous blob around the seed, with no
-    regard for labels (so it can span several trees / unassigned points
-    where they actually touch).
-
-    Breadth-first over a KD-tree, so the cost tracks the blob size, not the
-    whole cloud; pass a ``tree`` already built over the same ``coords`` to
-    skip rebuilding it each call. ``cap`` stops the runaway case where a
-    large ``eps`` percolates the whole cloud into one mass.
-    """
-    from scipy.spatial import cKDTree
-
-    coords = np.ascontiguousarray(coords, dtype=np.float64)
-    n = len(coords)
-    if n == 0:
-        return np.empty(0, dtype=np.int64)
-    tree = tree if tree is not None else cKDTree(coords)
-    seed = int(seed)
-    seen = np.zeros(n, dtype=bool)
-    seen[seed] = True
-    frontier = np.array([seed], dtype=np.int64)
-    while frontier.size:
-        groups = tree.query_ball_point(coords[frontier], eps, workers=-1)
-        cand = np.unique(np.concatenate(
-            [np.asarray(g, dtype=np.int64) for g in groups]
-        )) if len(groups) else np.empty(0, dtype=np.int64)
-        frontier = cand[~seen[cand]]
-        seen[frontier] = True
-        if seen.sum() >= cap:
-            break
-    return np.flatnonzero(seen)
-
-
 def connected_patch(
     coords: np.ndarray, labels: np.ndarray, seed: int, eps: float
 ) -> np.ndarray:
