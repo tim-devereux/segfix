@@ -317,6 +317,9 @@ def _combined_panel(*widgets):
     scroll = QScrollArea()
     scroll.setWidgetResizable(True)
     scroll.setWidget(inner)
+    # Floor so the "All Trees" / "Selected Tree" tables get room to breathe
+    # rather than collapsing to a sliver; the dock edge is still draggable.
+    scroll.setMinimumWidth(360)
     return scroll
 
 
@@ -412,6 +415,7 @@ def _run_scene(args) -> int:
     win.setCorner(
         Qt.Corner.TopRightCorner, Qt.DockWidgetArea.RightDockWidgetArea
     )
+    win.resizeDocks([right_dock], [440], Qt.Orientation.Horizontal)
     panel.size_spin.setValue(args.point_size)
     _build_menus(win, panel)
     bind_shortcuts(win, panel)
