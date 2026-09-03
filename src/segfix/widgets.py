@@ -21,6 +21,7 @@ from qtpy.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDoubleSpinBox,
+    QFrame,
     QGridLayout,
     QGroupBox,
     QHBoxLayout,
@@ -28,6 +29,7 @@ from qtpy.QtWidgets import (
     QLabel,
     QMessageBox,
     QPushButton,
+    QScrollArea,
     QSlider,
     QTableWidget,
     QTableWidgetItem,
@@ -541,15 +543,29 @@ class SegFixWidget(QWidget):
         self.focus_margin.valueChanged.connect(self._update_neighbour_picker)
         neighbour_header.addWidget(self.focus_margin)
         sel.addLayout(neighbour_header)
-        # A fixed 2-column grid, not a wrapping flow layout: nested inside
-        # this box's QVBoxLayout a flow layout's height-for-width wasn't
-        # honoured, so its rows drew on top of the Split/Unassign/Noise
-        # buttons below. A grid's row heights are plain and the box sizes to
-        # them correctly.
+        # The neighbour buttons go in a 2-column grid inside a fixed-height
+        # scroll area, so the whole "Current tree" box stays one size no
+        # matter how many neighbours the current tree has — extras scroll
+        # rather than stretching the box (and, before, drawing over the
+        # buttons below it).
         self.neighbour_grid = QGridLayout()
         self.neighbour_grid.setContentsMargins(0, 0, 0, 0)
         self.neighbour_grid.setSpacing(4)
-        sel.addLayout(self.neighbour_grid)
+        neighbour_host = QWidget()
+        neighbour_host.setLayout(self.neighbour_grid)
+        neighbour_host.setAutoFillBackground(False)
+        self.neighbour_scroll = QScrollArea()
+        self.neighbour_scroll.setObjectName("neighbourScroll")
+        self.neighbour_scroll.setWidget(neighbour_host)
+        self.neighbour_scroll.setWidgetResizable(True)
+        self.neighbour_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.neighbour_scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        self.neighbour_scroll.viewport().setAutoFillBackground(False)
+        row_h = self.add_btn.sizeHint().height()
+        self.neighbour_scroll.setFixedHeight(3 * row_h + 2 * 4)
+        sel.addWidget(self.neighbour_scroll)
 
         sel.addWidget(self._subheading("Remove selection from its tree"))
         self._button(sel, "Split off as new tree (N)", self.on_create_new, "new")
@@ -571,6 +587,12 @@ class SegFixWidget(QWidget):
         # them whenever it changes (their backing/text can't ride the Qt
         # palette — they're translucent panels over the 3-D view).
         theme.subscribe(self._apply_overlay_theme)
+        # Freeze the "Current tree" box at its natural size now (empty
+        # neighbour grid, theme applied) so it never resizes later — the
+        # neighbour scroll area absorbs every change in neighbour count.
+        self._current_tree_overlay.setFixedSize(
+            250, self._current_tree_overlay.sizeHint().height()
+        )
         self._on_cloud_changed()
 
     # -- helpers -----------------------------------------------------
@@ -595,6 +617,11 @@ class SegFixWidget(QWidget):
                 " color: " + col["subtext"] + "; }"
                 "QGroupBox#currentTreeOverlay QLabel { color: "
                 + col["text"] + "; }"
+                # the neighbour scroller must not paint its own rectangle
+                # over the translucent panel
+                "QScrollArea#neighbourScroll, "
+                "QScrollArea#neighbourScroll > QWidget > QWidget "
+                "{ background: transparent; }"
             )
 
     def _button(self, parent_layout, text, slot, icon_name=None) -> None:
@@ -645,13 +672,11 @@ class SegFixWidget(QWidget):
         self._point_size_overlay = box
 
     def _position_current_tree_overlay(self, *_event) -> None:
-        """Pin the "Current tree" box to the canvas' right edge, top-aligned,
-        re-fitting its height to the content (the neighbour buttons come and
-        go). Also the vispy resize-event handler."""
+        """Pin the fixed-size "Current tree" box to the canvas' right edge,
+        top-aligned. Also the vispy resize-event handler."""
         box = getattr(self, "_current_tree_overlay", None)
         if box is None:
             return
-        box.adjustSize()
         native = self.c.view.native
         margin = 10
         x = max(margin, native.width() - box.width() - margin)
@@ -1337,7 +1362,6 @@ class SegFixWidget(QWidget):
                 w.deleteLater()
         if self.current is None:
             self.neighbour_label.setVisible(False)
-            self._position_current_tree_overlay()  # box shrinks back
             return
         from . import analysis
 
@@ -1364,7 +1388,6 @@ class SegFixWidget(QWidget):
                 lambda _checked=False, n=nid: self.on_send_to_neighbour(n)
             )
             self.neighbour_grid.addWidget(btn, i // 2, i % 2)
-        self._position_current_tree_overlay()  # re-fit height to the new rows
 
     def _require_selection(self) -> np.ndarray | None:
         idx = self.c.selected_indices()
