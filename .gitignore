@@ -20,3 +20,4 @@ segfix_settings.json
 *.segfix.json
 # workspace manifests (scene-mode "New Project" folders)
 segfix_project.json
+TODO.txt
