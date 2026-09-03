@@ -529,10 +529,8 @@ class SegFixWidget(QWidget):
         self.add_btn.clicked.connect(self.on_add)
         sel.addWidget(self.add_btn)
         neighbour_header = QHBoxLayout()
-        self.neighbour_label = QLabel("Send selection to neighbour:")
-        self.neighbour_label.setVisible(False)
-        neighbour_header.addWidget(self.neighbour_label, stretch=1)
-        neighbour_header.addWidget(QLabel("reach"))
+
+        neighbour_header.addWidget(QLabel("Neighbour reach"))
         self.focus_margin = QDoubleSpinBox()
         self.focus_margin.setRange(0.1, 50.0)
         self.focus_margin.setDecimals(1)
@@ -1375,15 +1373,13 @@ class SegFixWidget(QWidget):
             w = item.widget()
             if w is not None:
                 w.deleteLater()
-        if self.current is None:
-            self.neighbour_label.setVisible(False)
-            return
+
         from . import analysis
 
         neighbours = analysis.neighbours_by_points(
             self.c.cloud, self.current, self.focus_margin.value()
         )
-        self.neighbour_label.setVisible(bool(neighbours))
+        # self.neighbour_label.setVisible(bool(neighbours))
         for i, nid in enumerate(sorted(neighbours)):
             rgba = colors_for_labels(
                 np.array([nid]), self.c.cloud.label_colors
