@@ -168,5 +168,12 @@ class SceneWidget(QWidget):
             self.c.view.status = "Select a tree row first"
             return
         busy(self.c.view, f"Loading tree {label}…")
-        self.c.view.status = self.c.load_tree(label)
+        try:
+            self.c.view.status = self.c.load_tree(label)
+        except ValueError:
+            # Edits flushed by load_tree() (e.g. reassigning/unassigning all
+            # of this tree's points before switching away) can leave a
+            # still-visible table row pointing at a label with no points
+            # left. That's a stale selection, not a crash-worthy error.
+            self.c.view.status = f"Tree {label} no longer has any points"
         self._populate()
