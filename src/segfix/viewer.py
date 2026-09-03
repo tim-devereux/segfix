@@ -61,8 +61,12 @@ NOISE_COLOR = np.array([0.25, 0.25, 0.27, 1.0], dtype=np.float32)
 FADED_ALPHA = 0.32
 
 
-def _hsv_to_rgb(h: np.ndarray, s: float, v: float) -> np.ndarray:
-    """Vectorised HSV→RGB for hue array ``h`` in [0, 1)."""
+def _hsv_to_rgb(h: np.ndarray, s: np.ndarray, v: np.ndarray) -> np.ndarray:
+    """Vectorised HSV→RGB; ``h``, ``s`` and ``v`` are arrays (or scalars)
+    in [0, 1) that broadcast together."""
+    h, s, v = np.broadcast_arrays(
+        np.asarray(h, float), np.asarray(s, float), np.asarray(v, float)
+    )
     i = np.floor(h * 6).astype(int) % 6
     f = h * 6 - np.floor(h * 6)
     p = v * (1 - s)
@@ -74,19 +78,21 @@ def _hsv_to_rgb(h: np.ndarray, s: float, v: float) -> np.ndarray:
     return np.stack([r, g, b], axis=-1)
 
 
-def _boost(rgb: tuple) -> tuple:
-    """Brighten a source colour for display on the dark canvas.
+# Irrational, mutually unrelated strides. Multiplying an integer tree ID by
+# each and taking the fractional part spreads a set of consecutive *or*
+# arbitrary IDs evenly along that axis.
+_HUE_STRIDE = 0.61803398875   # 1/φ
+_SAT_STRIDE = 0.41421356237   # √2 − 1
+_VAL_STRIDE = 0.73205080757   # √3 − 1
 
-    raycloudtools assigns arbitrary RGB per tree and many come out dark or
-    washed out — at small point sizes they read as grey. Enforce a minimum
-    saturation/brightness while keeping the hue, so trees stay recognisable
-    by their original colour family. Display only: saving uses the untouched
-    ``label_colors``.
-    """
-    import colorsys
 
-    h, s, v = colorsys.rgb_to_hsv(rgb[0] / 255, rgb[1] / 255, rgb[2] / 255)
-    return colorsys.hsv_to_rgb(h, max(s, 0.55), max(v, 0.85))
+def _hashed_sv(ids: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Per-ID saturation and value, hashed across a narrow always-vivid band
+    (never muddy) so two trees that land on a near-identical hue still pull
+    apart in saturation or lightness."""
+    sat = 0.70 + 0.28 * np.mod(ids * _SAT_STRIDE, 1.0)   # 0.70 – 0.98
+    val = 0.80 + 0.20 * np.mod(ids * _VAL_STRIDE, 1.0)   # 0.80 – 1.00
+    return sat, val
 
 
 def colors_for_labels(labels: np.ndarray, label_colors=None, faded=None) -> np.ndarray:
@@ -116,15 +122,26 @@ def colors_for_labels(labels: np.ndarray, label_colors=None, faded=None) -> np.n
         # Compute one colour per distinct label, then scatter to points via
         # searchsorted — keeps the work O(N log K), not O(N*K), on big clouds.
         uniq = np.unique(ids)
-        # Multiply by the golden-ratio conjugate then take the fractional part
-        # to scatter consecutive IDs across the hue circle.
-        hue = np.mod(uniq * 0.61803398875, 1.0)
-        per_label = _hsv_to_rgb(hue, s=0.65, v=0.95).astype(np.float32)
+        uniq_f = uniq.astype(np.float64)
+        # Hue from the golden-ratio hash; saturation and value from their own
+        # hashes (see _hashed_sv) so the palette varies on all three axes.
+        hue = np.mod(uniq_f * _HUE_STRIDE, 1.0)
+        sat, val = _hashed_sv(uniq_f)
         if label_colors:
+            # Keep a source-coloured tree in its own colour family, but nudge
+            # its hue a little per-ID (so two trees the source painted alike
+            # still diverge) and take the hashed, always-vivid S/V.
+            import colorsys
+
+            nudge = (np.mod(uniq_f * _VAL_STRIDE * 2.0, 1.0) - 0.5) * 0.10
             for k, lab in enumerate(uniq):
                 src = label_colors.get(int(lab))
                 if src is not None:
-                    per_label[k] = _boost(src)
+                    src_h, _s, _v = colorsys.rgb_to_hsv(
+                        src[0] / 255, src[1] / 255, src[2] / 255
+                    )
+                    hue[k] = (src_h + nudge[k]) % 1.0
+        per_label = _hsv_to_rgb(hue, sat, val).astype(np.float32)
         pos = np.searchsorted(uniq, ids)
         colors[is_tree, :3] = per_label[pos]
         colors[is_tree, 3] = 1.0

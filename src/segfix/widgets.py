@@ -201,6 +201,8 @@ class SegFixWidget(QWidget):
     DONE_BG = QColor(35, 62, 42)  # green tint marking finished rows
     HIDE_COL = 3
     FADE_COL = 4
+    OVERLAY_W = 280  # fixed width of the "Current tree" box floating on the view
+    NEIGHBOUR_ROWS = 4  # neighbour buttons visible before the list scrolls
 
     def __init__(self, controller: SegFixController):
         super().__init__()
@@ -505,7 +507,7 @@ class SegFixWidget(QWidget):
         # _position_current_tree_overlay, kept pinned on canvas resize.
         sel_box = QGroupBox("Current tree", self.c.view.native)
         sel_box.setObjectName("currentTreeOverlay")
-        sel_box.setFixedWidth(250)  # styled by _apply_overlay_theme
+        sel_box.setFixedWidth(self.OVERLAY_W)  # styled by _apply_overlay_theme
         self._current_tree_overlay = sel_box
         sel = QVBoxLayout(sel_box)
         sel.setSpacing(3)
@@ -564,7 +566,9 @@ class SegFixWidget(QWidget):
         )
         self.neighbour_scroll.viewport().setAutoFillBackground(False)
         row_h = self.add_btn.sizeHint().height()
-        self.neighbour_scroll.setFixedHeight(3 * row_h + 2 * 4)
+        self.neighbour_scroll.setFixedHeight(
+            self.NEIGHBOUR_ROWS * row_h + (self.NEIGHBOUR_ROWS - 1) * 4
+        )
         sel.addWidget(self.neighbour_scroll)
 
         sel.addWidget(self._subheading("Remove selection from its tree"))
@@ -591,7 +595,8 @@ class SegFixWidget(QWidget):
         # neighbour grid, theme applied) so it never resizes later — the
         # neighbour scroll area absorbs every change in neighbour count.
         self._current_tree_overlay.setFixedSize(
-            250, self._current_tree_overlay.sizeHint().height()
+            self.OVERLAY_W,
+            self._current_tree_overlay.sizeHint().height() + 8,
         )
         self._on_cloud_changed()
 
