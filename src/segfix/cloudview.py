@@ -120,6 +120,11 @@ class CloudView:
         #: fn() -> None, set by the panel to refresh its selection readout
         self.on_selection_changed = None
 
+        #: while True, a double-click in the canvas recentres the turntable
+        #: pivot on the clicked point. The panel clears this whenever a
+        #: selection tool (lasso/cluster/…) is armed so a double-click there
+        #: only feeds the tool — see SegFixWidget._refresh_double_click_mode.
+        self.recenter_on_double_click = True
         # Move mode: double-click a point to make it the camera's pivot, so
         # orbiting turns around whatever you're looking at rather than the
         # cloud's centroid.
@@ -130,13 +135,14 @@ class CloudView:
     def _on_double_click(self, event) -> None:
         """Recentre the turntable on the double-clicked point (move mode only).
 
-        While the lasso/cluster tools are armed they lock the camera
-        (``interactive = False``); leave the pivot alone then so a stray
-        double-click during a selection doesn't lurch the view.
+        Suppressed while a selection tool is armed: those double-clicks belong
+        to the tool (e.g. cluster's click-to-grow), not the camera. The panel
+        toggles ``recenter_on_double_click`` to track the mode; the camera's
+        own ``interactive`` flag is a second guard.
         """
         if getattr(event, "button", None) != 1:
             return
-        if not self.view.camera.interactive:
+        if not self.recenter_on_double_click or not self.view.camera.interactive:
             return
         idx = self.pick_point((float(event.pos[0]), float(event.pos[1])))
         if idx is None:

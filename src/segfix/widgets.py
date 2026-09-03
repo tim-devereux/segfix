@@ -548,6 +548,15 @@ class SegFixWidget(QWidget):
             "font-weight: bold; }"
         )
         self.section_draw_btn.toggled.connect(self.on_toggle_lasso_section)
+        # Keep the canvas' double-click behaviour in step with the mode: pivot
+        # recentre in plain move mode, tool input while a selection tool is on.
+        for _mode_btn in (
+            self.lasso_btn, self.tree_lasso_btn,
+            self.cluster_btn, self.section_draw_btn,
+        ):
+            _mode_btn.toggled.connect(
+                lambda _checked: self._refresh_double_click_mode()
+            )
         lsec.addWidget(self.section_draw_btn)
         section_reset_btn = QPushButton("Reset")
         section_reset_btn.setToolTip("Clear the outline — show every point again")
@@ -738,6 +747,16 @@ class SegFixWidget(QWidget):
         if self.current is None:
             return indices[:0]
         return indices[self.c.cloud.labels[indices] == self.current]
+
+    def _refresh_double_click_mode(self) -> None:
+        """A canvas double-click recentres the turntable pivot only in plain
+        move mode; while any selection tool is armed the double-click is the
+        tool's (e.g. cluster's click-to-grow), so suppress the recentre."""
+        tool_armed = any(b.isChecked() for b in (
+            self.lasso_btn, self.tree_lasso_btn,
+            self.cluster_btn, self.section_draw_btn,
+        ))
+        self.c.view.recenter_on_double_click = not tool_armed
 
     def _uncheck_other_modes(self, active_btn) -> None:
         for btn in (
