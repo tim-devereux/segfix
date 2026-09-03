@@ -311,9 +311,10 @@ def _combined_panel(*widgets):
     lay = QVBoxLayout(inner)
     lay.setContentsMargins(4, 4, 4, 4)
     lay.setSpacing(4)
-    for w in widgets:
-        lay.addWidget(w)
-    lay.addStretch()
+    # The first widget (scene mode's "All Trees" table) takes the leftover
+    # vertical space; the rest keep their natural height.
+    for i, w in enumerate(widgets):
+        lay.addWidget(w, 1 if i == 0 else 0)
     scroll = QScrollArea()
     scroll.setWidgetResizable(True)
     scroll.setWidget(inner)

@@ -81,7 +81,7 @@ class SceneController:
 class SceneWidget(QWidget):
     """Tree table for the whole file; stacked above the editing panel."""
 
-    COLUMNS = ["Tree ID", "Points", "Done"]
+    COLUMNS = ["Done", "Tree ID", "Points"]
 
     def __init__(self, controller: SceneController):
         super().__init__()
@@ -103,15 +103,20 @@ class SceneWidget(QWidget):
 
         self.table = QTableWidget(0, len(self.COLUMNS))
         self.table.setHorizontalHeaderLabels(self.COLUMNS)
-        self.table.horizontalHeaderItem(2).setToolTip(
+        self.table.horizontalHeaderItem(0).setToolTip(
             "Whether this tree has been marked reviewed in the panel below"
         )
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SingleSelection)
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.table.setSortingEnabled(True)
-        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
-        self.table.setMaximumHeight(200)
+        # Start in Tree ID order; the user can click any header to re-sort and
+        # _populate then keeps whatever they picked (col 0 is now "Done").
+        self.table.sortByColumn(1, Qt.SortOrder.AscendingOrder)
+        header = self.table.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.ResizeToContents)  # Done
+        header.setSectionResizeMode(1, QHeaderView.Stretch)           # Tree ID
+        self.table.setMinimumHeight(150)  # fill the dock's vertical space
         self.table.cellDoubleClicked.connect(lambda *_: self.on_load_tree())
         blay.addWidget(self.table)
 
@@ -152,14 +157,14 @@ class SceneWidget(QWidget):
         for row, rec in enumerate(records):
             is_done = rec.label in done
             mark = "✓" if is_done else ""
-            for col, value in enumerate([rec.label, rec.count, mark]):
+            for col, value in enumerate([mark, rec.label, rec.count]):
                 item = QTableWidgetItem()
                 item.setData(Qt.DisplayRole, value)
                 item.setData(Qt.UserRole, rec.label)
                 if is_done:
                     item.setBackground(done_brush)
                 self.table.setItem(row, col, item)
-        self.table.setSortingEnabled(True)
+        self.table.setSortingEnabled(True)  # re-sorts by the header indicator
 
     def refresh(self) -> None:
         """Re-read done-state and point counts; call after external changes
