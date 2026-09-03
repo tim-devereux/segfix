@@ -37,6 +37,42 @@ def _repo_root() -> Path | None:
     return Path(out.stdout.strip())
 
 
+def checkout_version() -> str | None:
+    """``git describe`` for the checkout segfix runs from — e.g. ``0.3.2`` on
+    a release tag, ``0.3.2-5-gabc1234`` a few commits past it, with a
+    ``-dirty`` suffix when the working tree has uncommitted changes.
+    ``None`` when segfix isn't running from a git checkout.
+
+    ``segfix.__version__`` comes from the installed distribution's metadata,
+    frozen at ``pip install`` time — for the README's editable git install
+    that goes stale the moment ``pyproject.toml`` is bumped or the branch
+    moves, until the next reinstall. This tracks the working tree instead,
+    which is what actually runs.
+    """
+    root = _repo_root()
+    if root is None:
+        return None
+    try:
+        out = subprocess.run(
+            ["git", "describe", "--tags", "--always", "--dirty"],
+            cwd=root, capture_output=True, text=True, timeout=5, check=True,
+        )
+    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        return None
+    tag = out.stdout.strip()
+    if tag.startswith("v") and tag[1:2].isdigit():
+        tag = tag[1:]  # normalise the "v0.3.2" tag style to match __version__
+    return tag or None
+
+
+def display_version() -> str:
+    """Version string for UI chrome: the live checkout's ``git describe`` if
+    segfix runs from a clone, otherwise the installed distribution version."""
+    from . import __version__
+
+    return checkout_version() or __version__
+
+
 def check_for_update(timeout: float = 8.0) -> UpdateStatus | None:
     """Fetch the upstream remote and report how many commits the local
     checkout is behind it. ``None`` means "nothing to offer" — not a git

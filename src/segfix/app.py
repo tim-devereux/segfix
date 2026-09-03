@@ -194,13 +194,13 @@ def _run_scene(args) -> int:
     from qtpy.QtCore import Qt
     from qtpy.QtWidgets import QApplication, QLabel, QMainWindow
 
-    from . import __version__
     from .cloudview import CloudView
     from .icons import app_icon
     from .overlays import ScaleBarOverlay
     from .model import PointCloud
     from .scene_ui import SceneController, SceneWidget
     from .treecatalog import open_catalog
+    from .update import display_version
     from .viewer import busy, gpu_renderer_info
     from .widgets import SegFixController, SegFixWidget, bind_shortcuts
 
@@ -208,7 +208,19 @@ def _run_scene(args) -> int:
     app.setWindowIcon(app_icon())
 
     win = QMainWindow()
-    win.setWindowTitle(f"segfix {__version__} — {args.cloud}")
+
+    def _refresh_title() -> None:
+        win.setWindowTitle(f"segfix {display_version()} — {args.cloud}")
+
+    _refresh_title()
+    # Re-read the checkout version whenever the window is re-activated, so an
+    # external `git pull` / reinstall (or the startup dialog's own updater)
+    # shows up in the title without restarting.
+    app.focusChanged.connect(
+        lambda _old, now: _refresh_title()
+        if now is not None and (now is win or win.isAncestorOf(now))
+        else None
+    )
     win.setWindowIcon(app_icon())
 
     view = CloudView()
