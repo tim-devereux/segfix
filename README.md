@@ -63,7 +63,11 @@ list next time — most-recently-opened at the top and preselected, each row
 showing how long ago it was last opened.
 
 The per-point tree ID field is auto-detected (`treeID`, `PredInstance`,
-`label`, …); override with `--label-field NAME` if needed.
+`label`, …); override with `--label-field NAME` if needed. Labels that can't
+be a real tree ID — negatives (other than the noise marker) and values that
+overflow a signed 32-bit int, both of which some pipelines use as a "no tree"
+sentinel — are folded into *unassigned* on load, so they don't show up as
+spurious trees.
 
 ### Accepted formats
 
@@ -106,17 +110,33 @@ this does not apply to its output.)
 
 ## Editing workflow
 
-Navigation matches CloudCompare: clouds open **Z-up**, **left-drag rotates,
-right-drag pans, wheel zooms**.
+The menu bar carries the session-level actions: **File ▸ Open Project…**
+(`Ctrl+O`, reopens the startup dialog and switches project without a manual
+restart) and **Save Project** (`Ctrl+S`); **Edit ▸ Undo / Redo** (`Ctrl+Z` /
+`Ctrl+Shift+Z`); **Preferences ▸ Theme ▸ Light / Dark**, applied immediately
+and remembered (via `QSettings`) for next launch; and **Help ▸ About segfix**
+for the version, links, and full MIT licence.
 
-Two tables stack in the right-hand panel. **All Trees** (top) lists every tree
-in the file, with a `✓` once it has been reviewed — **double-click a row** to
-load that tree plus its spatial neighbours into the 3D view. **Selected Tree +
+Navigation matches CloudCompare: clouds open **Z-up**, **left-drag rotates,
+right-drag pans, wheel zooms**. **Double-click a point** while navigating to
+recentre the orbit on it. A metric scale bar and an X/Y/Z orientation tripod
+sit in the bottom-left of the view; the **point size** spinner floats in the
+top-left.
+
+The right-hand panel holds two tables in a **draggable vertical splitter**
+(opens at roughly 25 % / 75 %). **All Trees** (top) lists every tree in the
+file — a Done column (`✓` when reviewed), tree ID and point count, with a
+running `N/M trees (X %) done` line above it — **double-click a row** to load
+that
+tree plus its spatial neighbours into the 3D view. **Selected Tree +
 Neighbours** (below) is the review queue for what's currently loaded: a Done
 checkbox per tree, a 👁 column to hide one from the view, a **Fade** column to
 ghost one (still shown, still selectable), and the Prev / Done buttons. Both
 read the same `<cloud>.segfix.json` sidecar, written next to the working copy,
-so a half-finished plot resumes where you left off.
+so a half-finished plot resumes where you left off. Finished rows in either
+table get a green tint. The **Current tree** actions (Add selection,
+send-to-neighbour, Split / Unassign / Noise) float as a fixed column pinned
+to the right edge of the 3D view, next to the points they act on.
 
 1. Double-click a tree in **All Trees**. The camera flies to it and a
    wireframe box marks it. To declutter a crowded view, use the 👁 (hide) or
@@ -147,8 +167,9 @@ so a half-finished plot resumes where you left off.
    | `C` | Cross section on/off |
    | `Shift+L` | Draw a lasso-section outline |
    | `Shift+C` | Lasso section on/off |
-   | `Ctrl+Z` / `Ctrl+Shift+Z` | Undo / Redo |
-   | `Ctrl+S` | Save Project |
+   | `Ctrl+Z` / `Ctrl+Shift+Z` | Undo / Redo (also on the **Edit** menu) |
+   | `Ctrl+S` | Save Project (also on the **File** menu) |
+   | `Ctrl+O` | Open another project |
 
    To move stray points *to a neighbour* instead, lasso them and click one of
    the **→ id** buttons in the Current tree panel — one per tree within
@@ -182,7 +203,10 @@ so a half-finished plot resumes where you left off.
 | `operations.py` | pure, UI-agnostic label edits (reassign/split/unassign/noise) |
 | `analysis.py` | which trees touch which, by sampled point distance (KD-tree) |
 | `lasso.py` | 3D screen-space lasso: camera projection + polygon test |
-| `viewer.py` | label→colour mapping |
+| `cloudview.py` | the vispy 3D canvas: camera, points, selection halo, tree box |
+| `viewer.py` | label→colour mapping and visibility masks |
+| `overlays.py` | scale bar + orientation axes painted over the canvas |
+| `theme.py` | light/dark palette, remembered in `QSettings` |
 | `widgets.py` | Qt dock panel wiring selection → operations |
 | `icons.py` | inline SVG icons for the panel buttons and window |
 | `treecatalog.py` | default mode: memory-mapped tree-label grouping, neighbour load + write-back (`TreeCatalog` = PLY, `LasCatalog` = LAS, `open_catalog` picks) |
