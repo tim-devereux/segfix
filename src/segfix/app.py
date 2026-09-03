@@ -299,29 +299,25 @@ def _build_menus(win, panel) -> None:
 
 
 def _combined_panel(*widgets):
-    """Stack several dock-panel widgets into one scrollable widget.
+    """Stack scene mode's "All Trees" table above the shared segfix editing
+    panel in one right-hand dock (rather than a separate left dock).
 
-    Used so scene mode's own tree table sits above the shared segfix editing
-    panel in a single right-hand dock, instead of a separate left dock —
-    everything lives in one place.
+    A vertical splitter, so the divider is draggable; it starts at roughly
+    25 % top / 75 % bottom and keeps that ratio as the dock resizes.
     """
-    from qtpy.QtWidgets import QScrollArea, QVBoxLayout, QWidget
+    from qtpy.QtCore import Qt
+    from qtpy.QtWidgets import QSplitter
 
-    inner = QWidget()
-    lay = QVBoxLayout(inner)
-    lay.setContentsMargins(4, 4, 4, 4)
-    lay.setSpacing(4)
-    # The first widget (scene mode's "All Trees" table) takes the leftover
-    # vertical space; the rest keep their natural height.
-    for i, w in enumerate(widgets):
-        lay.addWidget(w, 1 if i == 0 else 0)
-    scroll = QScrollArea()
-    scroll.setWidgetResizable(True)
-    scroll.setWidget(inner)
-    # Floor so the "All Trees" / "Selected Tree" tables get room to breathe
-    # rather than collapsing to a sliver; the dock edge is still draggable.
-    scroll.setMinimumWidth(360)
-    return scroll
+    split = QSplitter(Qt.Orientation.Vertical)
+    for w in widgets:
+        split.addWidget(w)
+    split.setChildrenCollapsible(False)
+    for i in range(split.count()):
+        split.setStretchFactor(i, 1 if i == 0 else 3)
+    split.setSizes([1000] + [3000] * (split.count() - 1))
+    # Floor so the tables get room to breathe; the dock edge stays draggable.
+    split.setMinimumWidth(360)
+    return split
 
 
 def _bare_dock(widget, title: str):

@@ -260,7 +260,7 @@ class SegFixWidget(QWidget):
         header.setSectionResizeMode(2, QHeaderView.ResizeToContents)
         header.setSectionResizeMode(self.HIDE_COL, QHeaderView.ResizeToContents)
         header.setSectionResizeMode(self.FADE_COL, QHeaderView.ResizeToContents)
-        self.tree_table.setMaximumHeight(200)
+        self.tree_table.setMinimumHeight(150)  # fills its splitter pane
         self.tree_table.itemSelectionChanged.connect(self._on_table_selection)
         self.tree_table.itemChanged.connect(self._on_tree_item_changed)
         tlay.addWidget(self.tree_table)
@@ -587,7 +587,9 @@ class SegFixWidget(QWidget):
         # here; they're on the window menu bar now (see app._build_menus),
         # driven by the same on_undo / on_redo / on_save methods.
 
-        layout.addStretch()
+        # No trailing stretch: this panel is a splitter pane now, so let the
+        # "Selected Tree + Neighbours" box (and its table) fill the height.
+        layout.setStretch(0, 1)
         # Style the two canvas overlays for the current theme and restyle
         # them whenever it changes (their backing/text can't ride the Qt
         # palette — they're translucent panels over the 3-D view).
