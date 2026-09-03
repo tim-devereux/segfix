@@ -20,7 +20,7 @@ import os
 
 import numpy as np
 
-from .model import UNASSIGNED, PointCloud
+from .model import NOISE, UNASSIGNED, PointCloud
 
 # PLY scalar type name -> numpy dtype string.
 PLY_TYPE_MAP = {
@@ -270,6 +270,23 @@ def save_rgb_segmented(cloud: PointCloud, path: str) -> None:
         fh.write(struct.tobytes())
 
 
+def _normalize_labels(raw: np.ndarray) -> np.ndarray:
+    """Coerce a raw tree-ID column to ``int32``, folding anything that can't
+    be a real instance ID into :data:`~segfix.model.UNASSIGNED`.
+
+    A real ID is non-negative and fits in signed 32-bit. ``NOISE`` (-1) is a
+    first-class segfix label and is kept. Everything else is an upstream
+    "no tree" sentinel — other negatives (e.g. ``INT32_MIN``, which the
+    CHERLET pipeline writes), or, when the source column is unsigned, values
+    past ``2**31 - 1`` (e.g. a ``uint32`` all-ones) — and becomes
+    ``UNASSIGNED`` so it doesn't surface as a spurious tree.
+    """
+    wide = np.asarray(raw).astype(np.int64)  # widen first: no lossy wrap
+    int32_max = np.iinfo(np.int32).max
+    bad = (wide > int32_max) | ((wide < 0) & (wide != NOISE))
+    return np.where(bad, UNASSIGNED, wide).astype(np.int32)
+
+
 def _pick_label_field(names, requested: str | None) -> str | None:
     if requested is not None:
         return requested if requested in names else None
@@ -295,7 +312,7 @@ def _load_ply(path: str, label_field: str | None) -> PointCloud:
     prop_names = [p.name for p in vertex.properties]
     field = _pick_label_field(prop_names, label_field)
     if field is not None:
-        labels = np.asarray(vertex[field]).astype(np.int32)
+        labels = _normalize_labels(vertex[field])
     else:
         labels = np.zeros(len(coords), dtype=np.int32)
         field = "treeID"
@@ -353,7 +370,7 @@ def _load_las(path: str, label_field: str | None) -> PointCloud:
     names = list(las.point_format.dimension_names)
     field = _pick_label_field(names, label_field)
     if field is not None:
-        labels = np.asarray(las[field]).astype(np.int32)
+        labels = _normalize_labels(las[field])
     else:
         labels = np.zeros(len(coords), dtype=np.int32)
         field = "treeID"

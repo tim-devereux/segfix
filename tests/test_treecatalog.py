@@ -188,3 +188,33 @@ def test_save_as_new_path_copies_whole_file_and_keeps_pending_edits(
     msg3 = catalog.save()
     assert msg3.startswith("Saved 5")
     assert len(open_catalog(path).records) == 2
+
+
+def test_out_of_range_and_negative_labels_fold_into_unassigned(tmp_path):
+    """A pipeline "no tree" sentinel (INT32_MIN, from the CHERLET LAS) and a
+    plain negative id must not surface as trees — they load as UNASSIGNED,
+    while NOISE (-1) is left alone."""
+    coords = np.random.RandomState(0).rand(60, 3).astype(np.float64) * 10
+    tid = np.repeat([1, 2, -(2**31), -7, -1, 0], 10)  # 6 groups of 10
+    path = tmp_path / "sentinels.las"
+    _write_arbor_las(path, coords, tid)
+
+    cat = open_catalog(str(path))
+    assert sorted(cat.records) == [1, 2]          # only the real trees
+    folded = cat.labels[np.isin(tid, [-(2**31), -7])]
+    assert (folded == UNASSIGNED).all()
+    assert (cat.labels[tid == -1] == -1).all()    # NOISE preserved
+    assert (cat.labels[tid == 0] == UNASSIGNED).all()
+
+
+def test_unsigned_label_column_out_of_range_folds_into_unassigned(tmp_path):
+    """A uint32 treeID column whose "unassigned" sentinel is 2**32-1 (or any
+    value past int32 max) must not wrap to a bogus negative tree."""
+    coords = np.random.RandomState(1).rand(40, 3).astype(np.float64) * 10
+    tid = np.repeat([5, 6, 2**32 - 1, 2**31 + 3], 10)
+    path = tmp_path / "unsigned.las"
+    _write_arbor_las(path, coords, tid, extra_unsigned=True)
+
+    cat = open_catalog(str(path))
+    assert sorted(cat.records) == [5, 6]
+    assert (cat.labels[tid >= 2**31] == UNASSIGNED).all()

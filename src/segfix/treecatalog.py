@@ -302,7 +302,7 @@ class TreeCatalog(_BaseCatalog):
     def _decode_labels(self, sub):
         if self.is_rgb:
             return self._labels_from_rgb(sub)
-        return np.asarray(sub[self.label_field]).astype(np.int32), None
+        return io._normalize_labels(sub[self.label_field]), None
 
     def _labels_from_rgb(self, sub):
         r = sub[self._names["red"]].astype(np.uint32)
@@ -403,7 +403,7 @@ class LasCatalog(_BaseCatalog):
         return xyz.astype(np.float32)
 
     def _decode_labels(self, sub):
-        return np.asarray(sub[self.label_field]).astype(np.int32), None
+        return io._normalize_labels(sub[self.label_field]), None
 
     def _write_labels(self, out, changed: np.ndarray, values: np.ndarray) -> None:
         if self._label_is_unsigned:
