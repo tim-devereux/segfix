@@ -619,19 +619,9 @@ class SegFixWidget(QWidget):
         self._button(sel, "Noise (X)", self.on_noise, "noise")
         layout.addWidget(sel_box)
 
-        # -- session: history + save -----------------------------------
-        session_box = QGroupBox("Session")
-        session = QVBoxLayout(session_box)
-        session.setSpacing(3)
-        hist = QHBoxLayout()
-        self._button(hist, "Undo (Ctrl+Z)", self.on_undo, "undo")
-        self._button(hist, "Redo (Ctrl+Shift+Z)", self.on_redo, "redo")
-        session.addLayout(hist)
-
-        save = QHBoxLayout()
-        self._button(save, "Save Project (Ctrl+S)", self.on_save, "save")
-        session.addLayout(save)
-        layout.addWidget(session_box)
+        # Undo / Redo / Save Project used to live in a "Session" group box
+        # here; they're on the window menu bar now (see app._build_menus),
+        # driven by the same on_undo / on_redo / on_save methods.
 
         layout.addStretch()
         self._on_cloud_changed()
@@ -1528,9 +1518,9 @@ def bind_shortcuts(window, panel: SegFixWidget) -> None:
         "C": panel.cross_enable.toggle,
         "Shift+L": panel.section_draw_btn.toggle,
         "Shift+C": panel.lasso_section_enable.toggle,
-        "Ctrl+Z": panel.on_undo,
-        "Ctrl+Shift+Z": panel.on_redo,
-        "Ctrl+S": panel.on_save,
+        # Ctrl+Z / Ctrl+Shift+Z / Ctrl+S are the Edit/File menu actions'
+        # shortcuts now (app._build_menus) — binding them here too would make
+        # Qt see an ambiguous overload and fire neither.
     }
     panel._shortcuts = []  # keep refs alive
     for key, fn in bindings.items():

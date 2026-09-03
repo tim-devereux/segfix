@@ -141,14 +141,111 @@ def main(argv=None) -> int:
     from . import registry
     from .startup_ui import choose_project
 
-    choice = choose_project()
-    if choice is None:
-        return 0
-    open_path, registry_path, kind = choice
+    # "Open Project…" on the menu bar re-execs segfix with this set, so the
+    # freshly picked project opens straight away instead of showing the
+    # startup dialog a second time. Popped so a later re-exec starts clean.
+    preselected = os.environ.pop("SEGFIX_OPEN", None)
+    if preselected:
+        open_path = preselected
+        registry_path = os.environ.pop("SEGFIX_OPEN_REGISTRY", preselected)
+        kind = os.environ.pop("SEGFIX_OPEN_KIND", "file")
+    else:
+        choice = choose_project()
+        if choice is None:
+            return 0
+        open_path, registry_path, kind = choice
     args.cloud = open_path
     registry.add_entry(registry_path, kind=kind)
 
     return _run_scene(args)
+
+
+def _about(parent) -> None:
+    from qtpy.QtWidgets import QMessageBox
+
+    from .update import display_version
+
+    QMessageBox.about(
+        parent,
+        "About segfix",
+        f"<b>segfix {display_version()}</b>"
+        "<p>GUI tool to fix instance segmentation of tree point clouds.</p>"
+        "<p><a href='https://github.com/tim-devereux/segfix'>"
+        "github.com/tim-devereux/segfix</a></p>",
+    )
+
+
+def _open_project(win, panel) -> None:
+    """Menu "Open Project…": offer to save, pick another project in the
+    startup dialog, then re-exec segfix on it. Re-exec rather than an
+    in-place swap so the catalog, docks and GL context all rebuild cleanly.
+    """
+    import os
+
+    from qtpy.QtWidgets import QMessageBox
+
+    from .startup_ui import choose_project
+
+    if panel.c.cloud.can_undo():
+        answer = QMessageBox.question(
+            win,
+            "Open another project",
+            "Save changes to the current project first?",
+            QMessageBox.StandardButton.Save
+            | QMessageBox.StandardButton.Discard
+            | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Save,
+        )
+        if answer == QMessageBox.StandardButton.Cancel:
+            return
+        if answer == QMessageBox.StandardButton.Save:
+            panel.on_save()
+
+    choice = choose_project()
+    if choice is None:
+        return
+    open_path, registry_path, kind = choice
+    # main() records it in the registry after the re-exec.
+    os.environ["SEGFIX_OPEN"] = open_path
+    os.environ["SEGFIX_OPEN_REGISTRY"] = registry_path
+    os.environ["SEGFIX_OPEN_KIND"] = kind
+    # Replace this process; -c so it doesn't matter how segfix was launched
+    # (console script, -m, IDE). User CLI flags are carried across.
+    os.execv(
+        sys.executable,
+        [
+            sys.executable,
+            "-c",
+            "import sys; from segfix.app import main; sys.exit(main())",
+            *sys.argv[1:],
+        ],
+    )
+
+
+def _build_menus(win, panel) -> None:
+    """Window menu bar: File (open/save the project), Edit (undo/redo — the
+    former "Session" panel box), Help (about)."""
+    bar = win.menuBar()
+
+    file_menu = bar.addMenu("&File")
+    open_act = file_menu.addAction("Open Project…")
+    open_act.setShortcut("Ctrl+O")
+    open_act.triggered.connect(lambda: _open_project(win, panel))
+    save_act = file_menu.addAction("Save Project")
+    save_act.setShortcut("Ctrl+S")
+    save_act.triggered.connect(panel.on_save)
+
+    edit_menu = bar.addMenu("&Edit")
+    undo_act = edit_menu.addAction("Undo")
+    undo_act.setShortcut("Ctrl+Z")
+    undo_act.triggered.connect(panel.on_undo)
+    redo_act = edit_menu.addAction("Redo")
+    redo_act.setShortcut("Ctrl+Shift+Z")
+    redo_act.triggered.connect(panel.on_redo)
+
+    help_menu = bar.addMenu("&Help")
+    about_act = help_menu.addAction("About segfix")
+    about_act.triggered.connect(lambda: _about(win))
 
 
 def _combined_panel(*widgets):
@@ -262,6 +359,7 @@ def _run_scene(args) -> int:
         Qt.Corner.TopRightCorner, Qt.DockWidgetArea.RightDockWidgetArea
     )
     panel.size_spin.setValue(args.point_size)
+    _build_menus(win, panel)
     bind_shortcuts(win, panel)
 
     view.status = (
