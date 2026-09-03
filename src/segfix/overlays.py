@@ -105,22 +105,21 @@ class ScaleBarOverlay(QWidget):
         painter.setRenderHint(QPainter.Antialiasing)
 
         h = self.height()
+        # Bottom-left anchor region for the readout. Nothing is drawn behind
+        # it — the bar, tripod and labels sit straight on the canvas.
         panel = QRectF(
             self._MARGIN,
             h - self._MARGIN - self._PANEL_H,
             self._PANEL_W,
             self._PANEL_H,
         )
-        painter.setPen(Qt.NoPen)
-        painter.setBrush(QColor(20, 20, 20, 130))
-        painter.drawRoundedRect(panel, 5, 5)
 
         font = QFont(painter.font())
         font.setPointSizeF(max(7.5, font.pointSizeF() - 0.5))
         painter.setFont(font)
 
         self._paint_axes(
-            painter, panel.left() + 30, panel.top() + 32, deltas
+            painter, panel.left() + 30, panel.top() + 22, deltas
         )
         mpp = self._metres_per_pixel(deltas)
         if mpp:
