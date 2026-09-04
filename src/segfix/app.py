@@ -384,10 +384,20 @@ def _run_scene(args) -> int:
 
     status = win.statusBar()
     view.on_status = status.showMessage
-    gpu = gpu_renderer_info()
-    gpu_label = QLabel(f"GPU: {gpu}" if gpu else "GPU: unknown")
+    gpu_label = QLabel("GPU: detecting...")
     gpu_label.setStyleSheet("color: gray; padding: 0 6px;")
     status.addPermanentWidget(gpu_label)
+
+    def _report_gpu(event=None) -> None:
+        # No GL context is current until the canvas has actually drawn once
+        # (it's built with show=False, and .update() only queues a repaint —
+        # see busy()'s docstring in viewer.py) -- reading it any earlier
+        # always reports "unknown", regardless of platform or GPU.
+        gpu = gpu_renderer_info()
+        gpu_label.setText(f"GPU: {gpu}" if gpu else "GPU: unknown")
+        view.canvas.events.draw.disconnect(_report_gpu)
+
+    view.canvas.events.draw.connect(_report_gpu)
 
     empty = PointCloud(
         coords=np.empty((0, 3), np.float32), labels=np.empty(0, np.int32)
