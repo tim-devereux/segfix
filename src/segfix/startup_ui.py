@@ -56,7 +56,7 @@ class StartupDialog(QDialog):
 
         hint = QLabel(
             "Double-click a recent project, or start a new one by importing "
-            "a point cloud file — a private copy is made in a new project "
+            "a point cloud file - a private copy is made in a new project "
             "folder, and edits are saved to that copy, never the original."
         )
         hint.setWordWrap(True)
@@ -105,7 +105,7 @@ class StartupDialog(QDialog):
             age = registry.describe_age(entry.get("last_opened", ""))
             label = f"{mark}  {entry['path']}"
             if age:
-                label += f"   —  {age}"
+                label += f"   ({age})"
             item = QListWidgetItem(label)
             item.setToolTip(
                 f"Last opened {entry.get('last_opened', 'unknown')}"
@@ -224,7 +224,7 @@ class StartupDialog(QDialog):
             )
             return
         QApplication.restoreOverrideCursor()
-        self.update_label.setText("Updated — restart segfix to use it.")
+        self.update_label.setText("Updated. Restart segfix to use it.")
         self.update_btn.hide()
         QMessageBox.information(
             self, "Updated",

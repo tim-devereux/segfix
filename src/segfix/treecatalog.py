@@ -348,7 +348,7 @@ class TreeCatalog(_BaseCatalog):
         # a header that isn't there. See io.sniff_format.
         if io.sniff_format(self.path) != "ply":
             raise ValueError(
-                f"{self.path} doesn't look like a binary PLY (bad header) — "
+                f"{self.path} doesn't look like a binary PLY (bad header) - "
                 "wrong file, or an ASCII PLY?"
             )
         with open(self.path, "rb") as fh:
@@ -441,7 +441,7 @@ class LasCatalog(_BaseCatalog):
             )
         if io.sniff_format(self.path) != "las":
             raise ValueError(
-                f"{self.path} doesn't look like a LAS file (bad header) — "
+                f"{self.path} doesn't look like a LAS file (bad header) - "
                 "wrong file, or actually compressed .laz?"
             )
 
@@ -460,7 +460,7 @@ class LasCatalog(_BaseCatalog):
             raise ValueError(
                 f"{self.path}: LAS point records don't line up "
                 f"(record {self.dtype.itemsize}B x {self.count} + {self.offset}B "
-                f"header = {expected}B, file is {actual}B) — not a plain "
+                f"header = {expected}B, file is {actual}B) - not a plain "
                 "uncompressed LAS?"
             )
 

@@ -147,7 +147,7 @@ class LassoTool:
         if armed:
             self.view.set_camera_interactive(False)
             self._connect(True)
-            self.view.status = "Lasso armed — drag to select (Shift to add)"
+            self.view.status = "Lasso armed - drag to select (Shift to add)"
         else:
             self._connect(False)
             self.view.set_camera_interactive(True)
@@ -278,7 +278,7 @@ class ClusterTool:
             self.view.set_camera_interactive(False)
             self._connect(True)
             self.view.status = (
-                "Cluster — click a point to select its patch, click again "
+                "Cluster - click a point to select its patch, click again "
                 "to grow it (Shift adds)"
             )
         else:

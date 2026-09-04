@@ -360,7 +360,7 @@ def _run_scene(args) -> int:
     win = QMainWindow()
 
     def _refresh_title() -> None:
-        win.setWindowTitle(f"segfix {display_version()} — {args.cloud}")
+        win.setWindowTitle(f"segfix {display_version()} - {args.cloud}")
 
     _refresh_title()
     # Re-read the checkout version whenever the window is re-activated, so an

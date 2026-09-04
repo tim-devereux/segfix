@@ -132,7 +132,7 @@ def load(path: str, label_field: str | None = None) -> PointCloud:
     if kind != expected:
         raise ValueError(
             f"{path} doesn't look like a {expected.upper()} file (extension "
-            f"says {ext}, but its header doesn't match) — wrong format?"
+            f"says {ext}, but its header doesn't match) - wrong format?"
         )
     if ext in (".las", ".laz"):
         return _load_las(path, label_field)

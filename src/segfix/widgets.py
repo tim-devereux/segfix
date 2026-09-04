@@ -178,7 +178,7 @@ class SegFixController:
         current = set(self.view.selected) if additive else set()
         current.update(int(i) for i in indices)
         self.view.selected = current
-        tail = " — click again to grow" if level == 0 else f" (level {level})"
+        tail = " - click again to grow" if level == 0 else f" (level {level})"
         self.view.status = f"Cluster selected {len(current)} points{tail}"
 
     def selected_indices(self) -> np.ndarray:
@@ -246,7 +246,7 @@ class SegFixWidget(QWidget):
         )
         self.tree_table.horizontalHeaderItem(self.FADE_COL).setIcon(icon("fade"))
         self.tree_table.horizontalHeaderItem(self.FADE_COL).setToolTip(
-            "Fade this tree in the 3D view — ghosted for context, but still "
+            "Fade this tree in the 3D view - ghosted for context, but still "
             "shown and still selectable"
         )
         self.tree_table.setSelectionBehavior(QAbstractItemView.SelectRows)
@@ -271,7 +271,7 @@ class SegFixWidget(QWidget):
         prev_btn.setIconSize(QSize(18, 18))
         prev_btn.clicked.connect(lambda: self._step(-1))
         nav_row.addWidget(prev_btn)
-        self.done_btn = QPushButton("✓ Done — next (Space)")
+        self.done_btn = QPushButton("✓ Done - next (Space)")
         self.done_btn.setIcon(icon("next"))
         self.done_btn.setIconSize(QSize(18, 18))
         self.done_btn.clicked.connect(self.on_done_next)
@@ -326,7 +326,7 @@ class SegFixWidget(QWidget):
         self.tree_lasso_btn.setCheckable(True)
         self.tree_lasso_btn.setToolTip(
             "Freehand-select, but only points already belonging to the tree "
-            "under review — grabs a clean patch out of a crowded/overlapping "
+            "under review - grabs a clean patch out of a crowded/overlapping "
             "area without also picking up neighbouring trees."
         )
         self.tree_lasso_btn.toggled.connect(self.on_toggle_tree_lasso)
@@ -337,7 +337,7 @@ class SegFixWidget(QWidget):
         self.cluster_btn.setCheckable(True)
         self.cluster_btn.setToolTip(
             "Click a point to select the connected patch of the SAME tree's "
-            "points around it (a spatial region grow) — e.g. to grab an "
+            "points around it (a spatial region grow) - e.g. to grab an "
             "over-segmented fragment or a wrongly-attached limb. Shift-click "
             "adds to the selection."
         )
@@ -490,7 +490,7 @@ class SegFixWidget(QWidget):
             )
         lsec.addWidget(self.section_draw_btn)
         section_reset_btn = QPushButton("Reset")
-        section_reset_btn.setToolTip("Clear the outline — show every point again")
+        section_reset_btn.setToolTip("Clear the outline - show every point again")
         section_reset_btn.clicked.connect(self._on_lasso_section_reset)
         lsec.addWidget(section_reset_btn)
         self.lasso_section_label = QLabel(self)  # not shown; feeds the tooltip
@@ -859,7 +859,7 @@ class SegFixWidget(QWidget):
             )
             fade_item.setCheckState(Qt.Checked if faded else Qt.Unchecked)
             fade_item.setToolTip(
-                "Fade this tree — ghosted for context, still selectable"
+                "Fade this tree - ghosted for context, still selectable"
             )
             self.tree_table.setItem(row, self.FADE_COL, fade_item)
             self._style_done_row(row, done)
@@ -912,7 +912,7 @@ class SegFixWidget(QWidget):
         if changed and fly and tid is not None:
             self._fly_to(tid)
             self.c.view.status = (
-                f"Tree {tid} — lasso (L) then A/N/U/X to fix, "
+                f"Tree {tid} - lasso (L) then A/N/U/X to fix, "
                 "Space to mark done and continue"
             )
 
@@ -946,7 +946,7 @@ class SegFixWidget(QWidget):
         nxt = self._next_pending(start if start is not None else -1)
         if nxt is None:
             self._set_current(None)
-            self.c.view.status = "All trees done — save when ready"
+            self.c.view.status = "All trees done - save when ready"
             return
         self._set_current(nxt)
 
@@ -977,7 +977,7 @@ class SegFixWidget(QWidget):
         """
         if self.current is None:
             self.c.view.status = (
-                "No tree under review — press Space or click a table row"
+                "No tree under review - press Space or click a table row"
             )
             return
         neighbours = {int(t) for t in self.c.cloud.tree_ids} - {self.current}
@@ -998,7 +998,7 @@ class SegFixWidget(QWidget):
         others stay visible and selectable."""
         if self.current is None:
             self.c.view.status = (
-                "No tree under review — press Space or click a table row"
+                "No tree under review - press Space or click a table row"
             )
             return
         neighbours = {int(t) for t in self.c.cloud.tree_ids} - {self.current}
@@ -1079,7 +1079,7 @@ class SegFixWidget(QWidget):
     def _on_cross_section_toggled(self, checked: bool) -> None:
         self._apply_visibility()
         self.c.view.status = (
-            "Cross section on — only the slab is shown/selectable"
+            "Cross section on - only the slab is shown/selectable"
             if checked else "Cross section off"
         )
 
@@ -1134,13 +1134,13 @@ class SegFixWidget(QWidget):
         self._update_lasso_section_label()
         self._apply_visibility()
         self.c.view.status = (
-            f"Lasso section drawn — kept {mask.sum():,} of {n:,} points"
+            f"Lasso section drawn - kept {mask.sum():,} of {n:,} points"
         )
 
     def _on_lasso_section_toggled(self, checked: bool) -> None:
         self._apply_visibility()
         self.c.view.status = (
-            "Lasso section on — only the outline is shown/selectable"
+            "Lasso section on - only the outline is shown/selectable"
             if checked else "Lasso section off"
         )
 
@@ -1229,7 +1229,7 @@ class SegFixWidget(QWidget):
             self.on_done_changed()
         self.c.view.status = (
             f"Tree {tid} marked {'done' if done else 'not done'}"
-            + (f" — saved to {os.path.basename(path)}" if path else "")
+            + (f" - saved to {os.path.basename(path)}" if path else "")
         )
 
     def _style_done_row(self, row: int, done: bool) -> None:
@@ -1247,7 +1247,7 @@ class SegFixWidget(QWidget):
         title = "Selected Tree + Neighbours"
         if n:
             pct = round(100 * done / n)
-            self.trees_box.setTitle(f"{title} — {done}/{n} ({pct}%) done")
+            self.trees_box.setTitle(f"{title} - {done}/{n} ({pct}%) done")
         else:
             self.trees_box.setTitle(title)
 
@@ -1352,7 +1352,7 @@ class SegFixWidget(QWidget):
             self.current_swatch.setStyleSheet(
                 "background: none; border: 1px dashed gray;"
             )
-            self.current_label.setText("none — press Space or click a row")
+            self.current_label.setText("none - press Space or click a row")
             self.add_btn.setText("Add selection (A)")
             return
         rgba = colors_for_labels(
@@ -1410,7 +1410,7 @@ class SegFixWidget(QWidget):
     def _require_current(self) -> int | None:
         if self.current is None:
             self.c.view.status = (
-                "No tree under review — press Space or click a table row"
+                "No tree under review - press Space or click a table row"
             )
         return self.current
 

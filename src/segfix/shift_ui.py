@@ -54,13 +54,13 @@ class GlobalShiftDialog(QDialog):
         top.addWidget(icon_label, 0)
         span = maxs - mins
         text = QLabel(
-            "This cloud's coordinates are large — up to "
-            f"{float(np.abs(np.concatenate([mins, maxs])).max()):,.1f} — "
+            "This cloud's coordinates are large, up to "
+            f"{float(np.abs(np.concatenate([mins, maxs])).max()):,.1f}, "
             "which can lose sub-metre precision once stored as the 32-bit "
             "floats segfix (and the GPU) use.\n\n"
             f"Extent: {span[0]:,.2f} × {span[1]:,.2f} × {span[2]:,.2f} m\n\n"
             "Apply a global shift to bring the cloud near the origin? The "
-            "shift is remembered for this session only — nothing is written "
+            "shift is remembered for this session only; nothing is written "
             "back to the file."
         )
         text.setWordWrap(True)
