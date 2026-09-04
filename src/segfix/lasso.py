@@ -115,6 +115,17 @@ class LassoTool:
         (selection cleared), not a lasso.
     """
 
+    #: Minimum on-screen distance (pixels) between two recorded path
+    #: vertices. Every mouse-move event would otherwise append a point
+    #: regardless of how far the cursor actually moved; some platforms
+    #: (reported: Windows) deliver far more, and far less coalesced,
+    #: mouse-move events per drag than others, and with no cap that turns an
+    #: ordinary drag into a path with thousands of near-duplicate vertices.
+    #: _finish()'s polygon test is O(vertices x loaded points), so that alone
+    #: can block the app for seconds on a big loaded cloud -- a few pixels is
+    #: well below anything visible in the drawn outline.
+    MIN_SEGMENT_PX = 3.0
+
     def __init__(self, view, on_select, min_points: int = 3):
         self.view = view
         self.on_select = on_select
@@ -202,7 +213,13 @@ class LassoTool:
     def _on_move(self, event) -> None:
         if not self._armed or self._path is None:
             return
-        self._path.append(self._pos(event))
+        pos = self._pos(event)
+        last = self._path[-1]
+        moved_sq = (pos[0] - last[0]) ** 2 + (pos[1] - last[1]) ** 2
+        if moved_sq < self.MIN_SEGMENT_PX ** 2:
+            event.handled = True
+            return
+        self._path.append(pos)
         self._ensure_overlay().set_path(self._path)
         event.handled = True
 
