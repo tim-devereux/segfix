@@ -15,24 +15,45 @@ this module is just the dialog that asks.
 from __future__ import annotations
 
 import numpy as np
-from qtpy.QtWidgets import QDoubleSpinBox, QHBoxLayout, QLabel, QMessageBox, QVBoxLayout
+from qtpy.QtWidgets import (
+    QDialog,
+    QDialogButtonBox,
+    QDoubleSpinBox,
+    QHBoxLayout,
+    QLabel,
+    QStyle,
+    QVBoxLayout,
+)
 
 
-class GlobalShiftDialog(QMessageBox):
+class GlobalShiftDialog(QDialog):
     """Reports the cloud's coordinate range and offers an editable shift.
 
-    A ``QMessageBox`` subclass (not a plain ``QDialog``) so it gets a
-    sensible icon and default "Yes"-shaped button styling for free; the shift
-    spinboxes are inserted into its layout alongside the usual text.
+    A plain ``QDialog`` with its own explicit layout — earlier this rode on
+    ``QMessageBox``'s internal (private, undocumented) grid layout to get a
+    free icon and button styling, but inserting an extra row into that grid
+    landed on top of the button row instead of above it, so the shift
+    controls and the buttons overlapped. Building the layout by hand avoids
+    depending on QMessageBox's internals at all.
     """
 
     def __init__(self, mins: np.ndarray, maxs: np.ndarray,
                  suggested: np.ndarray, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Large coordinates")
-        self.setIcon(QMessageBox.Icon.Warning)
+        layout = QVBoxLayout(self)
+
+        top = QHBoxLayout()
+        icon_label = QLabel()
+        icon_label.setPixmap(
+            self.style()
+            .standardIcon(QStyle.StandardPixmap.SP_MessageBoxWarning)
+            .pixmap(40, 40)
+        )
+        icon_label.setFixedWidth(48)
+        top.addWidget(icon_label, 0)
         span = maxs - mins
-        self.setText(
+        text = QLabel(
             "This cloud's coordinates are large — up to "
             f"{float(np.abs(np.concatenate([mins, maxs])).max()):,.1f} — "
             "which can lose sub-metre precision once stored as the 32-bit "
@@ -42,7 +63,11 @@ class GlobalShiftDialog(QMessageBox):
             "shift is remembered for this session only — nothing is written "
             "back to the file."
         )
+        text.setWordWrap(True)
+        top.addWidget(text, 1)
+        layout.addLayout(top)
 
+        layout.addWidget(QLabel("Shift to apply (added to every coordinate):"))
         row = QHBoxLayout()
         self.spins = []
         for label, value in zip("XYZ", suggested.tolist()):
@@ -54,24 +79,26 @@ class GlobalShiftDialog(QMessageBox):
             spin.setMinimumWidth(110)
             row.addWidget(spin)
             self.spins.append(spin)
-        holder = QVBoxLayout()
-        holder.addWidget(QLabel("Shift to apply (added to every coordinate):"))
-        holder.addLayout(row)
-        # QMessageBox lays its own contents out in a QGridLayout; append our
-        # extra row beneath the standard text/icon area and above the buttons.
-        grid = self.layout()
-        grid.addLayout(holder, grid.rowCount() - 1, 0, 1, grid.columnCount())
+        layout.addLayout(row)
 
-        self.apply_btn = self.addButton("Apply Shift", QMessageBox.ButtonRole.AcceptRole)
-        self.keep_btn = self.addButton(
-            "Keep Original Coordinates", QMessageBox.ButtonRole.RejectRole
+        self.button_box = QDialogButtonBox()
+        self.apply_btn = self.button_box.addButton(
+            "Apply Shift", QDialogButtonBox.ButtonRole.AcceptRole
         )
-        self.setDefaultButton(self.apply_btn)
+        self.keep_btn = self.button_box.addButton(
+            "Keep Original Coordinates", QDialogButtonBox.ButtonRole.RejectRole
+        )
+        self.button_box.accepted.connect(self.accept)
+        self.button_box.rejected.connect(self.reject)
+        self.apply_btn.setDefault(True)
+        layout.addWidget(self.button_box)
+
+        self.setMinimumWidth(440)
 
     def shift(self) -> tuple[float, float, float] | None:
         """The chosen shift, or ``None`` if the user declined it. Call after
         ``exec()``."""
-        if self.clickedButton() is not self.apply_btn:
+        if self.result() != QDialog.DialogCode.Accepted:
             return None
         return tuple(s.value() for s in self.spins)
 
