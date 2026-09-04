@@ -27,7 +27,7 @@ from qtpy.QtWidgets import (
     QVBoxLayout,
 )
 
-from . import registry, update, workspace
+from . import io, registry, update, workspace
 
 _ICONS = {"workspace": "🗂", "file": "📄"}
 
@@ -123,6 +123,23 @@ class StartupDialog(QDialog):
         )
         if not source:
             return
+
+        # Reject a mismatched/bogus file immediately, before it's copied into
+        # a workspace: a "wrong format" file — its content doesn't match the
+        # extension it was picked under — used to only surface much later,
+        # inside open_catalog(), sometimes after a slow scan of the file's
+        # binary content that looked like a frozen app.
+        ext = Path(source).suffix.lower()
+        expected = "ply" if ext == ".ply" else "las" if ext in (".las", ".laz") else None
+        if expected is None or io.sniff_format(source) != expected:
+            QMessageBox.critical(
+                self, "Wrong format",
+                f"{source}\n\ndoesn't look like a point cloud segfix can "
+                "read: its content doesn't match a binary PLY or LAS/LAZ "
+                "header. Check you picked the right file.",
+            )
+            return
+
         parent, _ = str(Path.home()), None
         parent = QFileDialog.getExistingDirectory(
             self, "Choose where to create the project folder", parent,

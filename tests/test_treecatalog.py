@@ -218,3 +218,147 @@ def test_unsigned_label_column_out_of_range_folds_into_unassigned(tmp_path):
     cat = open_catalog(str(path))
     assert sorted(cat.records) == [5, 6]
     assert (cat.labels[tid >= 2**31] == UNASSIGNED).all()
+
+
+# -- global shift ("large coordinates") --------------------------------------
+def test_needs_global_shift_thresholds():
+    from segfix.treecatalog import GLOBAL_SHIFT_THRESHOLD, needs_global_shift
+
+    small = np.array([-5.0, -5.0, 0.0]), np.array([5.0, 5.0, 3.0])
+    assert not needs_global_shift(*small)
+
+    large = np.array([204277.0, 7223248.0, -0.4]), np.array([204303.0, 7223264.0, 14.0])
+    assert needs_global_shift(*large)
+
+    # exactly at the threshold is fine; just past it needs a shift
+    at = np.array([-GLOBAL_SHIFT_THRESHOLD]), np.array([GLOBAL_SHIFT_THRESHOLD])
+    assert not needs_global_shift(*at)
+    past = np.array([-GLOBAL_SHIFT_THRESHOLD - 1]), np.array([GLOBAL_SHIFT_THRESHOLD])
+    assert needs_global_shift(*past)
+
+
+def test_suggest_global_shift_moves_min_corner_to_the_origin():
+    from segfix.treecatalog import suggest_global_shift
+
+    mins = np.array([204277.15, 7223248.32, -0.37])
+    maxs = np.array([204302.76, 7223264.30, 14.04])
+    shift = suggest_global_shift(mins, maxs)
+    shifted_min = mins + shift
+    assert np.all(shifted_min >= 0) and np.all(shifted_min < 1)  # floor of mins
+
+
+def test_catalog_defaults_to_unshifted_without_a_prompt(tmp_path):
+    """Backwards compatible: open_catalog with no shift_prompt never shifts,
+    however large the coordinates — every existing caller keeps working."""
+    big = np.array([204300.0, 7223250.0, 5.0]) + np.random.RandomState(2).rand(30, 3) * 5
+    tid = np.repeat([1, 2, 0], 10)
+    path = tmp_path / "big.las"
+    _write_arbor_las(path, big, tid, offsets=(204000.0, 7223000.0, 0.0))
+
+    cat = open_catalog(str(path))
+    assert cat.global_shift is None
+    # Unshifted at this magnitude is genuinely imprecise -- that's the whole
+    # reason the feature exists -- so this only checks it's in the right
+    # ballpark, not tight to the metre.
+    np.testing.assert_allclose(cat.coords[:, :2].mean(axis=0), big[:, :2].mean(axis=0),
+                                atol=5.0)
+
+
+def test_catalog_applies_a_shift_when_prompt_accepts_it(tmp_path):
+    big = np.array([204300.0, 7223250.0, 5.0]) + np.random.RandomState(3).rand(30, 3) * 5
+    tid = np.repeat([1, 2, 0], 10)
+    path = tmp_path / "big.las"
+    _write_arbor_las(path, big, tid, offsets=(204000.0, 7223000.0, 0.0))
+
+    seen = {}
+
+    def prompt(mins, maxs, suggested):
+        seen["mins"], seen["maxs"], seen["suggested"] = mins, maxs, suggested
+        return tuple(suggested)  # accept the suggestion
+
+    cat = open_catalog(str(path), shift_prompt=prompt)
+    assert seen["mins"] is not None  # prompt was actually consulted
+    assert cat.global_shift is not None
+    # shifted coordinates land near the origin, at full precision
+    assert np.abs(cat.coords).max() < 100
+    # and match the original points once the shift is undone
+    unshifted = cat.coords.astype(np.float64) - np.asarray(cat.global_shift)
+    np.testing.assert_allclose(np.sort(unshifted[:, 0]), np.sort(big[:, 0]), atol=0.01)
+
+    # a per-tree load() carries the same shift and stays consistent with the
+    # resident (whole-catalog) coordinates
+    cloud, gidx = cat.load([1], margin=1.0)
+    assert cloud.global_shift == tuple(cat.global_shift.tolist())
+    np.testing.assert_allclose(cloud.coords, cat.coords[gidx], atol=1e-3)
+
+
+def test_catalog_prompt_declining_leaves_coordinates_unshifted(tmp_path):
+    big = np.array([204300.0, 7223250.0, 5.0]) + np.random.RandomState(4).rand(20, 3) * 5
+    tid = np.repeat([1, 0], 10)
+    path = tmp_path / "big.las"
+    _write_arbor_las(path, big, tid, offsets=(204000.0, 7223000.0, 0.0))
+
+    cat = open_catalog(str(path), shift_prompt=lambda mins, maxs, suggested: None)
+    assert cat.global_shift is None
+
+
+def test_shift_never_touches_saved_coordinate_bytes(tmp_path):
+    """The global shift is display/analysis-only: save() must still only
+    patch the label column, never coordinates -- on disk or off."""
+    big = np.array([204300.0, 7223250.0, 5.0]) + np.random.RandomState(5).rand(30, 3) * 5
+    tid = np.repeat([1, 2, 0], 10)
+    path = tmp_path / "big.las"
+    _write_arbor_las(path, big, tid, offsets=(204000.0, 7223000.0, 0.0))
+    before = path.read_bytes()
+
+    cat = open_catalog(
+        str(path), shift_prompt=lambda mins, maxs, suggested: tuple(suggested)
+    )
+    cloud, gidx = cat.load([2], margin=0.0)
+    ops.reassign(cloud, np.flatnonzero(cloud.labels == 2), 1)
+    cat.apply(cloud, gidx)
+    cat.save()
+
+    after = path.read_bytes()
+    assert len(after) == len(before)
+    a0 = np.frombuffer(before, dtype=cat.dtype, offset=cat.offset, count=cat.count)
+    a1 = np.frombuffer(after, dtype=cat.dtype, offset=cat.offset, count=cat.count)
+    for name in cat.dtype.names:
+        if name == "treeID":
+            continue
+        np.testing.assert_array_equal(a0[name], a1[name])
+
+
+# -- wrong-format guard ("app freezes") --------------------------------------
+def test_sniff_format_identifies_real_files_and_rejects_garbage(tmp_path):
+    ply = tmp_path / "a.ply"
+    _write_raycloud_ply(
+        ply, np.zeros((3, 3)), np.zeros((3, 3), dtype=np.uint8)
+    )
+    assert io.sniff_format(str(ply)) == "ply"
+
+    las = tmp_path / "a.las"
+    _write_arbor_las(las, np.zeros((10, 3)), np.zeros(10, dtype=int))
+    assert io.sniff_format(str(las)) == "las"
+
+    garbage = tmp_path / "bogus.ply"
+    garbage.write_bytes(os.urandom(4096))
+    assert io.sniff_format(str(garbage)) is None
+
+
+def test_wrong_extension_content_rejected_fast_not_scanned(tmp_path):
+    """A .ply-named file that is not actually PLY must fail immediately from
+    the magic-byte check, not fall into _parse_ply_header's line-by-line scan
+    of the (here, large) binary content -- the freeze this guards against."""
+    import time
+
+    fake = tmp_path / "fake.ply"
+    fake.write_bytes(os.urandom(20_000_000))  # no 'ply' magic, no newlines guaranteed
+
+    start = time.monotonic()
+    with pytest.raises(ValueError, match="doesn't look like"):
+        open_catalog(str(fake))
+    assert time.monotonic() - start < 1.0
+
+    with pytest.raises(ValueError, match="doesn't look like"):
+        io.load(str(fake))

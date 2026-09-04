@@ -46,6 +46,32 @@ LABEL_CANDIDATES = (
 )
 
 
+def sniff_format(path: str) -> str | None:
+    """Peek the first bytes of ``path`` to tell a real PLY or LAS/LAZ from
+    anything else — fast, a handful of bytes, never a scan.
+
+    This guards the real header parsers below (:func:`_parse_ply_header`,
+    ``laspy.open``): handed an arbitrary binary file with a ``.ply``
+    extension, ``_parse_ply_header`` reads line by line looking for
+    ``end_header`` — on non-text binary data that can mean minutes spent
+    reading a multi-gigabyte file mostly-one-fake-"line"-at-a-time before it
+    ever fails (readline() has nothing bounding how far it looks for a
+    newline). A file picked with the wrong format should fail in
+    microseconds, not freeze the app. Returns ``"ply"``, ``"las"`` (also
+    matches ``.laz`` — LASzip keeps the plain LAS magic), or ``None``.
+    """
+    try:
+        with open(path, "rb") as fh:
+            head = fh.read(4)
+    except OSError:
+        return None
+    if head[:3] == b"ply":
+        return "ply"
+    if head[:4] == b"LASF":
+        return "las"
+    return None
+
+
 def _parse_ply_header(fh):
     """Parse a binary/ascii PLY header from an open binary file handle.
 
@@ -93,12 +119,23 @@ def _is_rgb_segmented(props, label_field) -> bool:
 def load(path: str, label_field: str | None = None) -> PointCloud:
     """Read a binary PLY or LAS/LAZ. Raises ``ValueError`` for anything else."""
     ext = os.path.splitext(path)[1].lower()
-    if ext in (".las", ".laz"):
-        return _load_las(path, label_field)
-    if ext != ".ply":
+    if ext not in (".ply", ".las", ".laz"):
         raise ValueError(
             f"segfix reads binary PLY and LAS/LAZ, not {ext or path!r}"
         )
+    # Magic-byte check before any header parsing: a file whose actual
+    # content doesn't match its extension must fail fast here, not stall
+    # inside _parse_ply_header's line-by-line scan of what turns out to be
+    # arbitrary binary data (see sniff_format's docstring).
+    kind = sniff_format(path)
+    expected = "ply" if ext == ".ply" else "las"
+    if kind != expected:
+        raise ValueError(
+            f"{path} doesn't look like a {expected.upper()} file (extension "
+            f"says {ext}, but its header doesn't match) — wrong format?"
+        )
+    if ext in (".las", ".laz"):
+        return _load_las(path, label_field)
     # Peek at the header: if the segmentation is encoded as RGB (no label
     # field but colour present), take the fast RGB-segmented path.
     with open(path, "rb") as fh:

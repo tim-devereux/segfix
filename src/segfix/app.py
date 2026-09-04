@@ -339,7 +339,7 @@ def _run_scene(args) -> int:
     """
     import numpy as np
     from qtpy.QtCore import Qt
-    from qtpy.QtWidgets import QApplication, QLabel, QMainWindow
+    from qtpy.QtWidgets import QApplication, QLabel, QMainWindow, QMessageBox
 
     from . import theme
     from .cloudview import CloudView
@@ -347,6 +347,7 @@ def _run_scene(args) -> int:
     from .overlays import ScaleBarOverlay
     from .model import PointCloud
     from .scene_ui import SceneController, SceneWidget
+    from .shift_ui import prompt_global_shift
     from .treecatalog import open_catalog
     from .update import display_version
     from .viewer import busy, gpu_renderer_info
@@ -395,7 +396,27 @@ def _run_scene(args) -> int:
 
     win.showMaximized()
     busy(view, f"Scanning trees in {args.cloud}…")
-    catalog = open_catalog(args.cloud, label_field=args.label_field)
+    try:
+        catalog = open_catalog(
+            args.cloud,
+            label_field=args.label_field,
+            shift_prompt=lambda mins, maxs, suggested:
+                prompt_global_shift(win, mins, maxs, suggested),
+        )
+    except Exception as exc:
+        # A wrong/corrupt file used to raise this far with the window already
+        # shown maximized and app.exec() not yet reached — no event loop was
+        # running to keep it responsive, so it looked exactly like a freeze
+        # even though the process was about to exit with a traceback. Fail
+        # visibly and exit cleanly instead.
+        win.close()
+        QMessageBox.critical(
+            None, "Can't open this cloud",
+            f"{args.cloud}\n\ncould not be opened:\n\n{exc}\n\n"
+            "segfix reads binary PLY (RGB-segmented or with a label field) "
+            "and uncompressed LAS with a treeID column.",
+        )
+        return 1
 
     seg = SegFixController(view, empty)
     panel = SegFixWidget(seg)

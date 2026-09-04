@@ -207,12 +207,18 @@ def test_save_rejects_unknown_extension(tmp_path):
 
 
 # -- LAS / LAZ (arbor output) -----------------------------------------------
-def _write_arbor_las(path, coords, tree_id, *, fmt=7, extra_unsigned=False):
-    """A minimal arbor-shaped LAS: XYZ + an int ``treeID`` Extra-Bytes column."""
+def _write_arbor_las(path, coords, tree_id, *, fmt=7, extra_unsigned=False,
+                      offsets=(0.0, 0.0, 0.0)):
+    """A minimal arbor-shaped LAS: XYZ + an int ``treeID`` Extra-Bytes column.
+
+    ``offsets`` matters for large (e.g. UTM-referenced) ``coords``: LAS
+    stores XYZ as ``(value - offset) / scale`` in a 32-bit int, so without a
+    matching offset a large coordinate simply doesn't fit.
+    """
     import laspy
 
     header = laspy.LasHeader(version="1.4", point_format=fmt)
-    header.offsets = [0.0, 0.0, 0.0]
+    header.offsets = list(offsets)
     header.scales = [0.001, 0.001, 0.001]
     header.add_extra_dim(laspy.ExtraBytesParams(
         name="treeID",

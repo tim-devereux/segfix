@@ -46,6 +46,10 @@ class PointCloud:
         keyed by name.  Carried through on save when the format supports it.
     source_path / label_field:
         Provenance, used to round-trip the file on save.
+    global_shift:
+        ``(dx, dy, dz)`` already added to ``coords`` relative to the source
+        file, or ``None`` if the cloud wasn't shifted. See
+        :func:`segfix.treecatalog.suggest_global_shift`.
     """
 
     coords: np.ndarray
@@ -61,6 +65,12 @@ class PointCloud:
     # For RGB-segmented clouds: the original colour of each tree label, used
     # both for display and to write colours back on save.
     label_colors: dict | None = None
+    # (dx, dy, dz) added to the source file's raw coordinates to bring a
+    # large-magnitude cloud (e.g. UTM-referenced LiDAR) near the origin
+    # before it's stored as float32 — see treecatalog.suggest_global_shift.
+    # Display/analysis metadata only: coordinates are never written back to
+    # disk, so this is never subtracted back out on save.
+    global_shift: tuple[float, float, float] | None = None
 
     # Indices touched by the most recent set_labels/undo/redo (empty on a
     # no-op, None before the first edit). Lets the viewer recolour just the

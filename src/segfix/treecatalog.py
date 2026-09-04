@@ -25,11 +25,38 @@ from __future__ import annotations
 import os
 import shutil
 from dataclasses import dataclass
+from typing import Callable
 
 import numpy as np
 
 from . import io
 from .model import NOISE, UNASSIGNED, PointCloud
+
+# Beyond this magnitude, float32 mantissa precision (~7 significant digits)
+# starts eating into sub-metre point detail — e.g. a UTM northing around
+# 7,000,000 only keeps ~1m precision once cast to float32. CloudCompare uses
+# the same "global shift" idea for the same reason.
+GLOBAL_SHIFT_THRESHOLD = 1.0e4
+
+#: ``(mins, maxs, suggested_shift) -> (dx, dy, dz) | None`` — ``None`` means
+#: "load unshifted". Wired to a Qt dialog by the app; ``None`` (the default)
+#: skips the prompt entirely and never shifts, which is what every existing
+#: (small-coordinate) catalog and test expects.
+ShiftPrompt = Callable[[np.ndarray, np.ndarray, np.ndarray], "tuple[float, float, float] | None"]
+
+
+def needs_global_shift(mins: np.ndarray, maxs: np.ndarray) -> bool:
+    """True when any coordinate is far enough from the origin that float32
+    storage would start losing meaningful precision."""
+    if mins.size == 0:
+        return False
+    return bool(max(np.abs(mins).max(), np.abs(maxs).max()) > GLOBAL_SHIFT_THRESHOLD)
+
+
+def suggest_global_shift(mins: np.ndarray, maxs: np.ndarray) -> np.ndarray:
+    """A round shift bringing the bounding box's minimum corner to the origin
+    — the same convention CloudCompare's "Global Shift" dialog suggests."""
+    return -np.floor(mins)
 
 
 @dataclass
@@ -46,7 +73,7 @@ class _BaseCatalog:
     """Format-agnostic label index over a memory-mapped point cloud.
 
     Subclasses implement the file-format specifics (:meth:`_open`,
-    :meth:`_decode_coords`, :meth:`_decode_labels`, :meth:`_write_labels`,
+    :meth:`_decode_coords_raw`, :meth:`_decode_labels`, :meth:`_write_labels`,
     :meth:`_finalize_save`); everything else here — the grouping index,
     neighbour search, subset load/apply and the diff-based save — is shared.
 
@@ -57,14 +84,26 @@ class _BaseCatalog:
     is only read for the points actually requested via :meth:`load`.
     """
 
-    def __init__(self, path: str, label_field: str | None = None):
+    def __init__(
+        self,
+        path: str,
+        label_field: str | None = None,
+        shift_prompt: ShiftPrompt | None = None,
+    ):
         self.path = path
         self._label_field_req = label_field
         # Subclass fills in: offset, count, dtype, _names, is_rgb, label_field,
         # and _mm (the memmap of fixed-size point records).
         self._open()
 
-        self.coords = self._decode_coords(self._mm)
+        # Decode once at full (float64) precision — shifting after the fact
+        # would already have lost whatever a premature float32 cast rounded
+        # away — then resolve/apply the global shift and store as float32.
+        raw_coords = self._decode_coords_raw(self._mm)
+        self.global_shift = self._resolve_global_shift(raw_coords, shift_prompt)
+        self.coords = self._shift_and_cast(raw_coords)
+        del raw_coords
+
         self.labels, self.label_colors = self._decode_labels(self._mm)
         self.labels = np.asarray(self.labels).astype(np.int32)
 
@@ -73,12 +112,40 @@ class _BaseCatalog:
         self._build_index()
         self._next_id = int(self.labels.max()) + 1 if self.labels.size else 1
 
+    # -- global shift ------------------------------------------------------
+    def _resolve_global_shift(
+        self, raw_coords: np.ndarray, shift_prompt: ShiftPrompt | None
+    ) -> np.ndarray | None:
+        """``None`` (load unshifted) unless the cloud's coordinates are large
+        enough to need it *and* a prompt is wired up and says yes — see
+        :data:`ShiftPrompt`. Never shifts on its own initiative: an
+        unattended/headless open (no ``shift_prompt``) always gets the file's
+        original coordinates, unchanged."""
+        if shift_prompt is None or not raw_coords.size:
+            return None
+        mins, maxs = raw_coords.min(axis=0), raw_coords.max(axis=0)
+        if not needs_global_shift(mins, maxs):
+            return None
+        chosen = shift_prompt(mins, maxs, suggest_global_shift(mins, maxs))
+        return None if chosen is None else np.asarray(chosen, dtype=np.float64)
+
+    def _shift_and_cast(self, raw: np.ndarray) -> np.ndarray:
+        if self.global_shift is not None:
+            raw = raw + self.global_shift
+        return raw.astype(np.float32)
+
     # -- format hooks (subclass) -----------------------------------------
     def _open(self) -> None:  # pragma: no cover - abstract
         raise NotImplementedError
 
-    def _decode_coords(self, sub) -> np.ndarray:  # pragma: no cover - abstract
+    def _decode_coords_raw(self, sub) -> np.ndarray:  # pragma: no cover - abstract
+        """Full-precision (float64) coordinates, before any global shift."""
         raise NotImplementedError
+
+    def _decode_coords(self, sub) -> np.ndarray:
+        """Shifted, float32 coordinates for a subset — used by :meth:`load`,
+        so a loaded tree's points line up with the resident ``self.coords``."""
+        return self._shift_and_cast(self._decode_coords_raw(sub))
 
     def _decode_labels(self, sub):  # pragma: no cover - abstract
         raise NotImplementedError
@@ -195,6 +262,10 @@ class _BaseCatalog:
             label_field=self.label_field or "treeID",
             source_format="raycloud_rgb" if self.is_rgb else "auto",
             label_colors=self.label_colors,
+            global_shift=(
+                tuple(self.global_shift.tolist())
+                if self.global_shift is not None else None
+            ),
         )
         # New tree IDs (splits, grow) must be unique across the *whole* file,
         # not just this subset — see next_free_id(). This mirrors the
@@ -271,6 +342,15 @@ class TreeCatalog(_BaseCatalog):
     """
 
     def _open(self) -> None:
+        # Fails in microseconds on a wrong/mismatched file, instead of
+        # _parse_ply_header stalling — potentially for minutes on a huge
+        # file — scanning arbitrary binary content line by line looking for
+        # a header that isn't there. See io.sniff_format.
+        if io.sniff_format(self.path) != "ply":
+            raise ValueError(
+                f"{self.path} doesn't look like a binary PLY (bad header) — "
+                "wrong file, or an ASCII PLY?"
+            )
         with open(self.path, "rb") as fh:
             fmt, props, count, offset = io._parse_ply_header(fh)
         if "binary" not in fmt:
@@ -292,12 +372,12 @@ class TreeCatalog(_BaseCatalog):
         self._mm = np.memmap(self.path, dtype=self.dtype, mode="r",
                               offset=self.offset, shape=(self.count,))
 
-    def _decode_coords(self, sub) -> np.ndarray:
+    def _decode_coords_raw(self, sub) -> np.ndarray:
         return np.column_stack([
             sub[self._names["x"]],
             sub[self._names["y"]],
             sub[self._names["z"]],
-        ]).astype(np.float32)
+        ]).astype(np.float64)
 
     def _decode_labels(self, sub):
         if self.is_rgb:
@@ -359,6 +439,11 @@ class LasCatalog(_BaseCatalog):
                 "be memory-mapped (workspace.create_workspace decompresses on "
                 "import)"
             )
+        if io.sniff_format(self.path) != "las":
+            raise ValueError(
+                f"{self.path} doesn't look like a LAS file (bad header) — "
+                "wrong file, or actually compressed .laz?"
+            )
 
         with laspy.open(self.path) as fh:
             header = fh.header
@@ -394,13 +479,12 @@ class LasCatalog(_BaseCatalog):
         self._mm = np.memmap(self.path, dtype=self.dtype, mode="r",
                               offset=self.offset, shape=(self.count,))
 
-    def _decode_coords(self, sub) -> np.ndarray:
-        xyz = np.column_stack([
+    def _decode_coords_raw(self, sub) -> np.ndarray:
+        return np.column_stack([
             sub[self._names["x"]].astype(np.float64) * self._scales[0] + self._offsets[0],
             sub[self._names["y"]].astype(np.float64) * self._scales[1] + self._offsets[1],
             sub[self._names["z"]].astype(np.float64) * self._scales[2] + self._offsets[2],
         ])
-        return xyz.astype(np.float32)
 
     def _decode_labels(self, sub):
         return io._normalize_labels(sub[self.label_field]), None
@@ -447,17 +531,26 @@ def _laz_export_path(source_las: str, target_las: str) -> str | None:
     return os.path.splitext(target_las)[0] + ".laz"
 
 
-def open_catalog(path: str, label_field: str | None = None) -> _BaseCatalog:
+def open_catalog(
+    path: str,
+    label_field: str | None = None,
+    shift_prompt: ShiftPrompt | None = None,
+) -> _BaseCatalog:
     """Open ``path`` with the backend its extension calls for.
 
     ``.ply`` → :class:`TreeCatalog`; ``.las`` → :class:`LasCatalog`. ``.laz`` is
     rejected here — :mod:`workspace` decompresses it to ``.las`` on import.
+
+    ``shift_prompt``, if given, is offered a chance to apply a "global shift"
+    (see :func:`needs_global_shift`) when the cloud's coordinates are large
+    enough that float32 storage would start losing precision; omit it (the
+    default) to always load coordinates unshifted, exactly as before.
     """
     ext = os.path.splitext(path)[1].lower()
     if ext == ".ply":
-        return TreeCatalog(path, label_field=label_field)
+        return TreeCatalog(path, label_field=label_field, shift_prompt=shift_prompt)
     if ext in (".las", ".laz"):
-        return LasCatalog(path, label_field=label_field)
+        return LasCatalog(path, label_field=label_field, shift_prompt=shift_prompt)
     raise ValueError(f"segfix opens .ply and .las clouds, not {ext or path!r}")
 
 
