@@ -7,7 +7,7 @@ segmented LiDAR cloud, see each tree in its own colour, and correct mistakes by
 lassoing points and reassigning, splitting off, or dismissing them — then save
 back to a corrected version of the input, retaining all fields.
 
-![segfix reviewing a segmented plot](https://github.com/user-attachments/assets/dc454e6e-93ad-45f9-aa20-a61d225c0a94)
+<img width="2008" height="1044" alt="Segfix Screenshot" src="https://github.com/user-attachments/assets/03a63367-6350-4198-99ad-c29a593d971d" />
 
 Beta note: This software is in beta. Testing is done on Fedora Linux 44 and Windows 11, MacOS should work but has not been tested.
 
