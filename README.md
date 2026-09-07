@@ -110,6 +110,28 @@ dismiss as noise (`X`) are written back as `0` (unassigned) — segfix's own
 alone cannot tell noise from unassigned. (arbor writes a signed `treeID`, so
 this does not apply to its output.)
 
+### Dense clouds
+
+On load segfix measures the cloud's typical point spacing. If points are closer
+than **2 cm** it offers to downsample for the session — one point per voxel (2 cm
+by default, editable in the prompt), which is plenty to see and re-label a tree
+but a fraction of the points to draw and lasso. Choose **Keep Full Resolution**
+and nothing changes.
+
+Downsampling is a working-set choice, not a destructive one. Nothing is written
+until you save, and on **Save** the labels you edited are interpolated back onto
+every original point: each full-resolution point follows the nearest kept point
+*that was the same tree as it*, and only where that kept point is one you
+actually re-labelled — so untouched parts of the cloud keep their original
+labels byte for byte. The saved file has all of its points and all of its
+fields, in the format it came in.
+
+The one thing to know is that a voxel is the resolution limit while you work:
+where two trees' points share a voxel, one label represents it, and unassigned
+points that fall inside a tree's voxels aren't separately selectable until you
+reload at full resolution. Pick a voxel smaller than the detail you need to
+separate.
+
 ## Editing workflow
 
 The menu bar carries the session-level actions: **File ▸ Open Project…**
@@ -203,6 +225,7 @@ to the right edge of the 3D view, next to the points they act on.
 | `io.py` | whole-cloud load/save (binary PLY, LAS/LAZ), label-field and RGB-segmentation detection |
 | `operations.py` | pure, UI-agnostic label edits (reassign/split/unassign/noise) |
 | `analysis.py` | which trees touch which, by sampled point distance (KD-tree) |
+| `density.py` | point-spacing measurement, voxel decimation, and the save-time interpolation back to full resolution |
 | `lasso.py` | 3D screen-space lasso: camera projection + polygon test |
 | `cloudview.py` | the vispy 3D canvas: camera, points, selection halo, tree box |
 | `viewer.py` | label→colour mapping and visibility masks |
@@ -212,6 +235,8 @@ to the right edge of the 3D view, next to the points they act on.
 | `icons.py` | inline SVG icons for the panel buttons and window |
 | `treecatalog.py` | default mode: memory-mapped tree-label grouping, neighbour load + write-back (`TreeCatalog` = PLY, `LasCatalog` = LAS, `open_catalog` picks) |
 | `scene_ui.py` | tree table + scene controller for the default mode |
+| `shift_ui.py` | load-time "large coordinates" (global shift) prompt |
+| `density_ui.py` | load-time "dense cloud" (downsample) prompt |
 | `registry.py` | on-disk list of recently opened files/projects |
 | `workspace.py` | project folders: copy (or decompress `.laz`→`.las`) an imported file, never touch the source |
 | `startup_ui.py` | startup dialog: pick a recent entry or start a new project |

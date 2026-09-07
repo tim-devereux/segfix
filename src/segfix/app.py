@@ -343,6 +343,7 @@ def _run_scene(args) -> int:
 
     from . import theme
     from .cloudview import CloudView
+    from .density_ui import prompt_downsample
     from .icons import app_icon
     from .overlays import ScaleBarOverlay
     from .model import PointCloud
@@ -412,6 +413,8 @@ def _run_scene(args) -> int:
             label_field=args.label_field,
             shift_prompt=lambda mins, maxs, suggested:
                 prompt_global_shift(win, mins, maxs, suggested),
+            density_prompt=lambda spacing, n_points, suggested:
+                prompt_downsample(win, spacing, n_points, suggested),
         )
     except Exception as exc:
         # A wrong/corrupt file used to raise this far with the window already
@@ -448,9 +451,15 @@ def _run_scene(args) -> int:
     _build_menus(win, panel)
     bind_shortcuts(win, panel)
 
+    decimated = (
+        f" Downsampled to {catalog.voxel_size * 100:g} cm for editing "
+        f"({catalog.working_count:,} of {catalog.count:,} points); edits are "
+        "interpolated back to every point on save."
+        if catalog.is_decimated else ""
+    )
     view.status = (
         f"{len(catalog.records)} trees in {args.cloud}. "
-        "Double-click a tree to load it with neighbours."
+        f"Double-click a tree to load it with neighbours.{decimated}"
     )
     return app.exec()
 

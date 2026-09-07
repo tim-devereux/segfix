@@ -73,7 +73,10 @@ class SceneController:
 
     def _save(self) -> str:
         self._flush()  # capture the live scene too, not just prior ones
-        msg = self.catalog.save()
+        # A decimated session interpolates its edits back onto every
+        # full-resolution point here, which is the one slow part of a save —
+        # let it report progress into the status bar rather than looking hung.
+        msg = self.catalog.save(progress=lambda m: busy(self.view, m))
         if self.on_saved is not None:
             self.on_saved()
         return msg
@@ -147,10 +150,21 @@ class SceneWidget(QWidget):
         total = len(records)
         n_done = sum(1 for rec in records if rec.label in done)
         pct = round(100 * n_done / total) if total else 0
+        catalog = self.c.catalog
+        decimated = (
+            f" · downsampled to {catalog.voxel_size * 100:g} cm"
+            if catalog.is_decimated else ""
+        )
         self.path_label.setText(
             f"{n_done}/{total} trees ({pct}%) done in "
-            f"{os.path.basename(self.c.catalog.path)}"
+            f"{os.path.basename(catalog.path)}{decimated}"
         )
+        if catalog.is_decimated:
+            self.path_label.setToolTip(
+                f"Editing {catalog.working_count:,} of {catalog.count:,} "
+                f"points, one per {catalog.voxel_size:g} m voxel. Saving "
+                "interpolates your edits back onto every original point."
+            )
         self.table.setSortingEnabled(False)
         self.table.setRowCount(total)
         done_brush = QBrush(theme.done_row_bg())

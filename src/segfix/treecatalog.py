@@ -18,6 +18,12 @@ in place:
   re-compresses back to ``.laz`` so arbor can re-read the corrected cloud.
 
 :func:`open_catalog` picks the backend from the path extension.
+
+A cloud too dense to review comfortably (points closer than
+:data:`segfix.density.DENSE_SPACING`) can be voxel-decimated for the session
+— the catalog then indexes, loads and edits one point per voxel, and
+:meth:`_BaseCatalog.save` interpolates those edits back onto every
+full-resolution point before writing, so the file keeps all of its points.
 """
 
 from __future__ import annotations
@@ -43,6 +49,18 @@ GLOBAL_SHIFT_THRESHOLD = 1.0e4
 #: skips the prompt entirely and never shifts, which is what every existing
 #: (small-coordinate) catalog and test expects.
 ShiftPrompt = Callable[[np.ndarray, np.ndarray, np.ndarray], "tuple[float, float, float] | None"]
+
+#: ``(spacing, n_points, suggested_voxel) -> voxel_size | None`` — ``None``
+#: means "review at full resolution". Wired to a Qt dialog by the app; as
+#: with :data:`ShiftPrompt`, omitting it (the default) skips the check
+#: entirely, so every existing caller and test loads every point.
+DensityPrompt = Callable[[float, int, float], "float | None"]
+
+# Full-resolution points decoded at a time when a decimated session's edits
+# are interpolated back on save (see _BaseCatalog._expand_to_full). Big
+# enough that the per-chunk overhead vanishes, small enough that the decoded
+# float64 coordinates stay a few hundred MB.
+_EXPAND_CHUNK = 4_000_000
 
 
 def needs_global_shift(mins: np.ndarray, maxs: np.ndarray) -> bool:
@@ -89,6 +107,7 @@ class _BaseCatalog:
         path: str,
         label_field: str | None = None,
         shift_prompt: ShiftPrompt | None = None,
+        density_prompt: DensityPrompt | None = None,
     ):
         self.path = path
         self._label_field_req = label_field
@@ -107,10 +126,69 @@ class _BaseCatalog:
         self.labels, self.label_colors = self._decode_labels(self._mm)
         self.labels = np.asarray(self.labels).astype(np.int32)
 
+        # New tree IDs must clear every label in the *file*, including trees
+        # that decimation may be about to drop from the working set below.
+        self._next_id = int(self.labels.max()) + 1 if self.labels.size else 1
+        self._resolve_decimation(density_prompt)
+
         # Snapshot to diff against on save — see save().
         self._original_labels = self.labels.copy()
         self._build_index()
-        self._next_id = int(self.labels.max()) + 1 if self.labels.size else 1
+
+    # -- decimation ("this cloud is very dense") ---------------------------
+    def _resolve_decimation(self, density_prompt: DensityPrompt | None) -> None:
+        """Offer to review a very dense cloud voxel-decimated, and take the
+        offer up if the prompt accepts it.
+
+        When it does, ``coords``/``labels`` (and therefore the tree index,
+        neighbour search and every :meth:`load`) cover only the kept points,
+        while ``_sub_idx`` remembers which file row each of them came from —
+        that mapping is what lets :meth:`save` put the edits back onto all
+        the points, not just the kept ones.
+
+        As with the global shift, nothing happens without a prompt: a
+        headless open always works at full resolution.
+        """
+        from . import density
+
+        self.spacing: float | None = None
+        self.voxel_size: float | None = None
+        # File row of each working point; None while working at full
+        # resolution, where the two are the same thing.
+        self._sub_idx: np.ndarray | None = None
+        if density_prompt is None or self.labels.size < 2:
+            return
+
+        self.spacing = density.estimate_spacing(self.coords)
+        if not (0.0 < self.spacing < density.DENSE_SPACING):
+            return
+        chosen = density_prompt(
+            self.spacing, int(self.count), density.suggest_voxel(self.spacing)
+        )
+        if chosen is None:
+            return
+
+        keep = density.voxel_indices(self.coords, float(chosen))
+        if keep.size >= self.count:
+            return  # nothing to gain; stay at full resolution
+        self._sub_idx = keep
+        self.coords = self.coords[keep]
+        self.labels = self.labels[keep]
+        self.voxel_size = float(chosen)
+
+    @property
+    def is_decimated(self) -> bool:
+        """True when the working set is a voxel-decimated subset of the file."""
+        return self._sub_idx is not None
+
+    @property
+    def working_count(self) -> int:
+        """Points actually loaded/edited — ``count`` unless decimated."""
+        return int(self.labels.size)
+
+    def _rows(self, idx: np.ndarray) -> np.ndarray:
+        """File rows for working-set positions ``idx``."""
+        return idx if self._sub_idx is None else self._sub_idx[idx]
 
     # -- global shift ------------------------------------------------------
     def _resolve_global_shift(
@@ -152,6 +230,16 @@ class _BaseCatalog:
 
     def _write_labels(self, out, changed: np.ndarray, values: np.ndarray) -> None:
         raise NotImplementedError  # pragma: no cover - abstract
+
+    def _raw_label_codes(self, sub) -> np.ndarray:
+        """The label each record carries *as the file stores it*, as integers.
+
+        Used only to group points by which tree they belonged to before this
+        session's edits (see :meth:`_expand_to_full`), so the raw value is
+        what's wanted — no folding of sentinels, no renumbering, and for an
+        RGB-segmented PLY the colour itself.
+        """
+        return np.asarray(sub[self.label_field]).astype(np.int64)
 
     def _finalize_save(self, target: str, is_new_target: bool) -> None:
         """Hook after the in-place patch is flushed (e.g. re-export LAZ)."""
@@ -239,7 +327,7 @@ class _BaseCatalog:
 
         global_idx = np.union1d(tree_idx, unassigned_idx).astype(np.int64)
 
-        sub = self._mm[global_idx]
+        sub = self._mm[self._rows(global_idx)]
         coords = self._decode_coords(sub)
         cloud_labels = self.labels[global_idx].copy()
 
@@ -294,12 +382,17 @@ class _BaseCatalog:
             self._next_id = max(self._next_id, int(self.labels.max()) + 1)
 
     # -- saving --------------------------------------------------------
-    def save(self, output: str | None = None) -> str:
+    def save(self, output: str | None = None, progress=None) -> str:
         """Write only the points whose label changed since the last save.
 
         Diffs against the snapshot taken at open time / after the previous
         save, so this reflects edits made across *any* tree visited this
         session, not just whatever is currently loaded.
+
+        On a decimated session the diff covers the kept points only, so it is
+        first interpolated back onto every full-resolution point it stands
+        for — see :meth:`_expand_to_full`. ``progress``, if given, is called
+        with a status string during that (slower) pass.
         """
         changed = np.flatnonzero(self.labels != self._original_labels)
         target = output or self.path
@@ -318,9 +411,10 @@ class _BaseCatalog:
             self._finalize_save(target, is_new_target)
             return f"Saved (no changes) → {target}"
 
+        rows, values = self._changed_rows(changed, progress)
         out = np.memmap(target, dtype=self.dtype, mode="r+",
                          offset=self.offset, shape=(self.count,))
-        self._write_labels(out, changed, self.labels[changed])
+        self._write_labels(out, rows, values)
         out.flush()
         del out
         self._finalize_save(target, is_new_target)
@@ -330,7 +424,84 @@ class _BaseCatalog:
             # Save As to a different file doesn't touch self.path, so an
             # in-place Save afterwards must still see these as pending.
             self._original_labels = self.labels.copy()
-        return f"Saved {changed.size:,} changed point(s) → {target}"
+        return f"Saved {rows.size:,} changed point(s) → {target}"
+
+    def _changed_rows(self, changed: np.ndarray, progress=None):
+        """``(file_rows, new_labels)`` to patch for the changed working-set
+        positions ``changed`` — the positions themselves at full resolution,
+        their full-resolution neighbourhoods when decimated."""
+        if self._sub_idx is None:
+            return changed, self.labels[changed]
+        return self._expand_to_full(changed, progress)
+
+    def _expand_to_full(self, changed: np.ndarray, progress=None):
+        """Interpolate a decimated session's edits back onto every point.
+
+        Each full-resolution point follows the nearest working point that was
+        the *same tree as it* (:func:`~segfix.density.class_trees` explains
+        why same-tree and not simply nearest), and only where that working
+        point is one the user re-labelled — so parts of the cloud nobody
+        touched keep the file's original labels exactly, down to the last
+        point, and a save stays a diff rather than a rewrite.
+
+        The scan is chunked over the memory-mapped records and skipped
+        entirely outside the bounding box of the edits, so its cost tracks
+        the size of what was edited, not the size of the file.
+        """
+        from .density import class_trees, expand_labels, in_box
+
+        # Which full-resolution points are worth looking at: every occupied
+        # voxel keeps a point, so no point sits further than one voxel
+        # diagonal (~1.73 x voxel) from the nearest working point, and
+        # anything more than two voxels outside the edited points' own box
+        # is therefore nearest to a working point that didn't change.
+        voxel = self.voxel_size or 0.0
+        reach = 2.0 * voxel
+        box_lo = self.coords[changed].min(axis=0)
+        box_hi = self.coords[changed].max(axis=0)
+        lo, hi = box_lo - reach, box_hi + reach
+        # Unchanged working points are candidates too: they are what stops an
+        # edit bleeding across a boundary into a tree the user left alone.
+        # Their box is wider again by the same diagonal, so a query point at
+        # the very edge can still be matched to the point that really is
+        # nearest to it.
+        cand = np.flatnonzero(
+            in_box(self.coords, box_lo - 2 * reach, box_hi + 2 * reach)
+        )
+        codes = self._raw_label_codes(self._mm[self._sub_idx])
+        trees = class_trees(self.coords, codes, cand)
+
+        rows: list[np.ndarray] = []
+        values: list[np.ndarray] = []
+        for start in range(0, self.count, _EXPAND_CHUNK):
+            stop = min(start + _EXPAND_CHUNK, self.count)
+            if progress is not None:
+                progress(
+                    f"Interpolating edits back to full resolution… "
+                    f"{100 * start // max(self.count, 1)}%"
+                )
+            block = self._mm[start:stop]
+            coords = self._decode_coords(block)
+            inside = np.flatnonzero(in_box(coords, lo, hi))
+            if not inside.size:
+                continue
+            local, source = expand_labels(
+                trees,
+                coords[inside],
+                self._raw_label_codes(block[inside]),
+                changed,
+                self.labels.size,
+                max_distance=reach,
+            )
+            if not local.size:
+                continue
+            rows.append(start + inside[local])
+            values.append(self.labels[source])
+
+        if not rows:
+            return (np.empty(0, dtype=np.int64),
+                    np.empty(0, dtype=self.labels.dtype))
+        return np.concatenate(rows), np.concatenate(values)
 
 
 class TreeCatalog(_BaseCatalog):
@@ -407,6 +578,15 @@ class TreeCatalog(_BaseCatalog):
             out[self._names["blue"]][changed] = colour[:, 2]
         else:
             out[self.label_field][changed] = values
+
+    def _raw_label_codes(self, sub) -> np.ndarray:
+        if not self.is_rgb:
+            return super()._raw_label_codes(sub)
+        return (
+            (sub[self._names["red"]].astype(np.int64) << 16)
+            | (sub[self._names["green"]].astype(np.int64) << 8)
+            | sub[self._names["blue"]].astype(np.int64)
+        )
 
     def _colours_for(self, labels: np.ndarray) -> np.ndarray:
         colour = np.zeros((labels.size, 3), dtype=np.uint8)
@@ -535,6 +715,7 @@ def open_catalog(
     path: str,
     label_field: str | None = None,
     shift_prompt: ShiftPrompt | None = None,
+    density_prompt: DensityPrompt | None = None,
 ) -> _BaseCatalog:
     """Open ``path`` with the backend its extension calls for.
 
@@ -545,12 +726,22 @@ def open_catalog(
     (see :func:`needs_global_shift`) when the cloud's coordinates are large
     enough that float32 storage would start losing precision; omit it (the
     default) to always load coordinates unshifted, exactly as before.
+
+    ``density_prompt``, likewise, is offered a chance to voxel-decimate a
+    cloud finer than :data:`segfix.density.DENSE_SPACING` for the session
+    (edits are interpolated back onto every point on save); omit it and the
+    whole cloud is reviewed at full resolution, exactly as before.
     """
     ext = os.path.splitext(path)[1].lower()
+    kwargs = dict(
+        label_field=label_field,
+        shift_prompt=shift_prompt,
+        density_prompt=density_prompt,
+    )
     if ext == ".ply":
-        return TreeCatalog(path, label_field=label_field, shift_prompt=shift_prompt)
+        return TreeCatalog(path, **kwargs)
     if ext in (".las", ".laz"):
-        return LasCatalog(path, label_field=label_field, shift_prompt=shift_prompt)
+        return LasCatalog(path, **kwargs)
     raise ValueError(f"segfix opens .ply and .las clouds, not {ext or path!r}")
 
 
