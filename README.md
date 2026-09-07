@@ -63,7 +63,16 @@ python scripts/make_sample.py --spacing 0.005 dense.las  # ~16M points, ~540 MB
 ```
 
 It reports the spacing it actually achieved, measured with the same estimator
-segfix runs on load.
+segfix runs on load. Add `--origin` to stand the plot somewhere georeferenced,
+which is what raises the *other* load-time question, the global shift:
+
+```bash
+python scripts/make_sample.py --spacing 0.01 --origin 204300 7223250 12 dense_utm.las
+```
+
+That one asks both questions in a single open — LAS only past 10 km from the
+origin, since this script's PLY writer stores xyz as float32 and would deliver
+the cloud already quantised to metres.
 
 `segfix` will open a startup dialog. Double-click
 a recent project to reopen it, or click **New Project…** to import a point cloud
@@ -137,6 +146,12 @@ every original point: each full-resolution point follows the nearest kept point
 actually re-labelled — so untouched parts of the cloud keep their original
 labels byte for byte. The saved file has all of its points and all of its
 fields, in the format it came in.
+
+If the cloud is also georeferenced far from the origin, the global-shift
+question comes first and this one follows. Decline the shift and the
+downsample offer is skipped entirely: unshifted coordinates that large have
+already lost sub-metre detail to the float32 cast, so a spacing measured on
+them would be reading quantisation rather than the cloud.
 
 The one thing to know is that a voxel is the resolution limit while you work:
 where two trees' points share a voxel, one label represents it, and unassigned

@@ -374,3 +374,64 @@ def test_decimated_save_promotes_only_the_lassoed_unassigned_points(tmp_path):
     # The far end of the strip, well outside the lasso, is untouched.
     far = reopened.coords[:, 0] > cut + 4 * cat.voxel_size
     assert far.any() and (reopened.labels[far] == UNASSIGNED).all()
+
+
+# -- interaction with the global-shift prompt --------------------------------
+def _dense_utm_plot(tmp_path):
+    """A dense plot standing at a UTM easting/northing, so opening it raises
+    both load-time questions at once."""
+    a = _grid(0.005, 30, 30, 6, origin=(204300.0, 7223250.0, 12.0))
+    b = _grid(0.005, 30, 30, 6, origin=(204305.0, 7223250.0, 12.0))
+    coords = np.vstack([a, b])
+    tid = np.repeat([1, 2], [len(a), len(b)])
+    path = tmp_path / "dense_utm.las"
+    _write_arbor_las(path, coords, tid,
+                     offsets=(204000.0, 7223000.0, 0.0))
+    return str(path), len(a) + len(b)
+
+
+def test_dense_utm_cloud_asks_both_questions_and_decimates(tmp_path):
+    path, n = _dense_utm_plot(tmp_path)
+    asked = []
+
+    cat = open_catalog(
+        path,
+        shift_prompt=lambda mins, maxs, sug: (asked.append("shift"), tuple(sug))[1],
+        density_prompt=lambda sp, n_, sug: (asked.append("density"), sug)[1],
+    )
+
+    assert asked == ["shift", "density"]
+    assert cat.global_shift is not None
+    # Measured on the shifted coordinates, so it's the real spacing.
+    assert cat.spacing == pytest.approx(0.005, rel=0.3)
+    assert cat.is_decimated and cat.working_count < n / 4
+
+
+def test_declining_the_shift_also_declines_the_density_check(tmp_path):
+    """Unshifted UTM coordinates have already lost sub-metre detail to the
+    float32 cast, so a spacing measured on them is quantisation, not the
+    cloud -- it reads far finer than the truth and voxelises far harder than
+    asked. The offer must not be made on those numbers."""
+    path, n = _dense_utm_plot(tmp_path)
+    asked = []
+
+    cat = open_catalog(
+        path,
+        shift_prompt=lambda mins, maxs, sug: (asked.append("shift"), None)[1],
+        density_prompt=lambda sp, n_, sug: (asked.append("density"), sug)[1],
+    )
+
+    assert asked == ["shift"]          # never got as far as the density check
+    assert cat.spacing is None
+    assert not cat.is_decimated and cat.working_count == n
+
+
+def test_large_coordinates_without_a_shift_prompt_are_left_alone(tmp_path):
+    """Same guard when there is no shift prompt wired up at all: the
+    coordinates are just as quantised, nobody was asked, so nothing is
+    decimated."""
+    path, n = _dense_utm_plot(tmp_path)
+
+    cat = open_catalog(path, density_prompt=lambda *a: a[2])
+
+    assert not cat.is_decimated and cat.working_count == n

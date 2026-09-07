@@ -159,6 +159,18 @@ class _BaseCatalog:
         if density_prompt is None or self.labels.size < 2:
             return
 
+        # Large coordinates that weren't shifted have already lost sub-metre
+        # detail to the float32 cast -- that is what the shift prompt warns
+        # about. Both the spacing measurement and the voxel grid would then
+        # be reading quantisation rather than the cloud: a 5mm scan at a UTM
+        # northing measures as "1mm spacing" and voxelises four times harder
+        # than asked, because points that really are distinct now share a
+        # coordinate. Don't offer a choice made on those numbers.
+        if self.global_shift is None and needs_global_shift(
+            self.coords.min(axis=0), self.coords.max(axis=0)
+        ):
+            return
+
         self.spacing = density.estimate_spacing(self.coords)
         if not (0.0 < self.spacing < density.DENSE_SPACING):
             return

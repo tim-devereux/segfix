@@ -9,6 +9,8 @@ points, and a handful of noise points floating with nothing near them.
 Usage:  python scripts/make_sample.py sample.ply
         python scripts/make_sample.py --format las sample.las
         python scripts/make_sample.py --spacing 0.01 dense.las
+        python scripts/make_sample.py --spacing 0.01 --origin 204300 7223250 12 \
+            dense_utm.las
 
 The ``.las`` form mimics arbor's output: XYZ plus a ``treeID`` Extra-Bytes
 column, so the LAS editing path (:class:`segfix.treecatalog.LasCatalog`) has
@@ -22,6 +24,13 @@ what makes a cloud *dense* — a metre of trunk is one ring of points, but at
 segfix's "points closer than 2cm" check and its downsample offer (see
 :mod:`segfix.density`). The same deliberate segmentation errors are in it,
 so the whole fix-and-save round trip can be exercised at full density.
+
+``--origin`` puts the plot somewhere georeferenced (a UTM easting/northing,
+say) instead of at the origin, which is what a real survey looks like and
+what trips segfix's *other* load-time question, the global shift (see
+:mod:`segfix.shift_ui`). Combined with ``--spacing`` it produces a cloud that
+asks both questions in one open, which is the only way to exercise them
+together.
 """
 
 import argparse
@@ -192,7 +201,7 @@ _CENTERS = [
 ]
 
 
-def main(out, spacing=None):
+def main(out, spacing=None, origin=None):
     rng = np.random.default_rng(42)
     parts, labels = [], []
 
@@ -228,7 +237,13 @@ def main(out, spacing=None):
             UNASSIGNED)
     add(floaters(bounds, rng=rng), NOISE)
 
-    coords = np.vstack(parts)
+    # float64 from here on: adding a UTM-sized origin to float32 coordinates
+    # would round away the millimetres this just went to the trouble of
+    # generating, before laspy ever sees them. (LAS itself is safe -- it
+    # stores xyz as scaled offsets from a header origin, not as floats.)
+    coords = np.vstack(parts).astype(np.float64)
+    if origin is not None:
+        coords += np.asarray(origin, dtype=np.float64)
     labels = np.concatenate(labels)
 
     if os.path.splitext(out)[1].lower() in (".las", ".laz"):
@@ -248,6 +263,19 @@ def main(out, spacing=None):
         f"+ {n_unassigned:,} unassigned + {n_noise:,} noise → {out} "
         f"({os.path.getsize(out) / 1e6:,.0f} MB)"
     )
+    if origin is not None:
+        from segfix.treecatalog import needs_global_shift
+
+        mins, maxs = coords.min(axis=0), coords.max(axis=0)
+        verdict = (
+            "opening this also offers a global shift"
+            if needs_global_shift(mins, maxs) else
+            "not large enough for segfix to offer a global shift"
+        )
+        print(
+            f"Plot placed at ({mins[0]:,.0f}, {mins[1]:,.0f}, {mins[2]:,.0f}) "
+            f"- {verdict}"
+        )
     if spacing is not None:
         # Measured with the same estimator segfix runs on load, so the
         # number printed here is the one the app will report back.
@@ -275,8 +303,28 @@ if __name__ == "__main__":
              "gives ~16M (~540 MB). Anything under 0.02 trips segfix's "
              "dense-cloud check.",
     )
+    ap.add_argument(
+        "--origin", type=float, nargs=3, default=None, metavar=("X", "Y", "Z"),
+        help="place the plot here instead of at (0, 0, 0), e.g. --origin "
+             "204300 7223250 12 for a UTM-referenced cloud that also trips "
+             "segfix's large-coordinate (global shift) prompt. LAS only past "
+             "10 km from the origin: a PLY sample stores xyz as float32, "
+             "which at those magnitudes quantises the cloud to metres.",
+    )
     args = ap.parse_args()
     if args.spacing is not None and args.spacing <= 0:
         ap.error("--spacing must be positive")
     default_name = "dense" if args.spacing is not None else "sample"
-    main(args.out or f"{default_name}.{args.format}", spacing=args.spacing)
+    out = args.out or f"{default_name}.{args.format}"
+    if args.origin is not None and os.path.splitext(out)[1].lower() == ".ply":
+        from segfix.treecatalog import GLOBAL_SHIFT_THRESHOLD
+
+        if max(abs(v) for v in args.origin) > GLOBAL_SHIFT_THRESHOLD:
+            ap.error(
+                f"--origin {args.origin} needs a .las output: this script's "
+                "PLY writer stores xyz as float32, which past "
+                f"{GLOBAL_SHIFT_THRESHOLD:,.0f} m keeps under a metre of "
+                "precision - the cloud would arrive already ruined, which is "
+                "not a useful test of the prompt that exists to prevent that."
+            )
+    main(out, spacing=args.spacing, origin=args.origin)
