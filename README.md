@@ -7,7 +7,7 @@ back to a corrected version of the input, retaining all fields.
 
 ![segfix reviewing a segmented plot](https://github.com/user-attachments/assets/dc454e6e-93ad-45f9-aa20-a61d225c0a94)
 
-Beta note: This software is in beta. Testing has been done on Ubuntu Linux 24.04 LTS; Windows is supported but may behave differently.
+Beta note: This software is in beta. Testing is done on Fedora Linux 44 and Windows 11, MacOS should work but has not been tested.
 
 ## Contributing
 
