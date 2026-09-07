@@ -72,11 +72,19 @@ class SceneController:
             self.catalog.apply(self.seg.cloud, self._global_idx)
 
     def _save(self) -> str:
+        from .progress_ui import progress_window
+
         self._flush()  # capture the live scene too, not just prior ones
         # A decimated session interpolates its edits back onto every
-        # full-resolution point here, which is the one slow part of a save —
-        # let it report progress into the status bar rather than looking hung.
-        msg = self.catalog.save(progress=lambda m: busy(self.view, m))
+        # full-resolution point here, and a Save As copies the whole file:
+        # both scale with the cloud, so a save gets the same progress window
+        # the open does rather than one status line and a frozen canvas.
+        with progress_window(
+            self.view.native.window(),
+            "Saving",
+            os.path.basename(self.catalog.path),
+        ) as report:
+            msg = self.catalog.save(progress=report.report)
         if self.on_saved is not None:
             self.on_saved()
         return msg

@@ -435,3 +435,78 @@ def test_large_coordinates_without_a_shift_prompt_are_left_alone(tmp_path):
     cat = open_catalog(path, density_prompt=lambda *a: a[2])
 
     assert not cat.is_decimated and cat.working_count == n
+
+
+# -- load/save progress reporting --------------------------------------------
+def _collect(path, **kwargs):
+    seen = []
+    cat = open_catalog(path, progress=lambda m, f: seen.append((m, f)), **kwargs)
+    return cat, seen
+
+
+def _assert_sane(seen):
+    """A progress trace has to be usable as a bar: in range, never going
+    backwards, and finishing full."""
+    assert seen, "nothing reported"
+    fractions = [f for _, f in seen]
+    assert all(0.0 <= f <= 1.0 for f in fractions), fractions
+    assert fractions == sorted(fractions), fractions
+    assert fractions[-1] == 1.0
+    assert all(m.strip() for m, _ in seen)
+
+
+def test_open_reports_every_phase_it_runs(tmp_path):
+    path, _, _ = _dense_plot(tmp_path)
+    cat, seen = _collect(path, density_prompt=lambda *a: a[2])
+
+    _assert_sane(seen)
+    messages = [m for m, _ in seen]
+    assert any("coordinate" in m.lower() for m in messages)
+    assert any("label" in m.lower() for m in messages)
+    assert any("density" in m.lower() for m in messages)
+    assert any("downsampl" in m.lower() for m in messages)
+    assert any("index" in m.lower() for m in messages)
+    assert cat.is_decimated
+
+
+def test_open_without_decimation_skips_that_phase_but_still_finishes(tmp_path):
+    """The phases that don't run don't report; the bar still has to reach the
+    end, or a load would leave it stuck short of full."""
+    path, _, _ = _dense_plot(tmp_path)
+    _cat, seen = _collect(path)  # no density prompt: no measuring, no thinning
+
+    _assert_sane(seen)
+    messages = [m for m, _ in seen]
+    assert not any("downsampl" in m.lower() for m in messages)
+    assert not any("density" in m.lower() for m in messages)
+
+
+def test_save_reports_progress_through_to_the_write(tmp_path):
+    path, _, n_b = _dense_plot(tmp_path)
+    cat = open_catalog(path, density_prompt=lambda *a: a[2])
+    cloud, gidx = cat.load([2], margin=0.0)
+    ops.reassign(cloud, np.flatnonzero(cloud.labels == 2), 1)
+    cat.apply(cloud, gidx)
+
+    seen = []
+    cat.save(progress=lambda m, f: seen.append((m, f)))
+
+    assert seen
+    fractions = [f for _, f in seen]
+    assert fractions == sorted(fractions)
+    assert all(0.0 <= f <= 1.0 for f in fractions)
+    messages = " | ".join(m.lower() for m, _ in seen)
+    assert "interpolating" in messages and "writing" in messages
+    # The write step names the real, full-resolution count.
+    assert any(f"{n_b:,}" in m for m, _ in seen)
+
+
+def test_progress_is_optional_everywhere(tmp_path):
+    """The default path reports nothing and behaves exactly as before -- what
+    every headless caller and every other test in the suite relies on."""
+    path, _, _ = _dense_plot(tmp_path)
+    cat = open_catalog(path, density_prompt=lambda *a: a[2])
+    cloud, gidx = cat.load([2], margin=0.0)
+    ops.reassign(cloud, np.flatnonzero(cloud.labels == 2), 1)
+    cat.apply(cloud, gidx)
+    assert "Saved" in cat.save()

@@ -147,6 +147,12 @@ actually re-labelled — so untouched parts of the cloud keep their original
 labels byte for byte. The saved file has all of its points and all of its
 fields, in the format it came in.
 
+Opening and saving a cloud this size take long enough to look like a freeze, so
+both run behind a progress window naming the phase they are in (reading
+coordinates, measuring density, downsampling, indexing trees). The work happens
+on the GUI thread, so the bar advances between phases rather than smoothly
+through them — a phase that is one numpy call cannot repaint while it runs.
+
 If the cloud is also georeferenced far from the origin, the global-shift
 question comes first and this one follows. Decline the shift and the
 downsample offer is skipped entirely: unshifted coordinates that large have
@@ -264,6 +270,7 @@ to the right edge of the 3D view, next to the points they act on.
 | `scene_ui.py` | tree table + scene controller for the default mode |
 | `shift_ui.py` | load-time "large coordinates" (global shift) prompt |
 | `density_ui.py` | load-time "dense cloud" (downsample) prompt |
+| `progress_ui.py` | progress window for the two slow operations, opening and saving |
 | `registry.py` | on-disk list of recently opened files/projects |
 | `workspace.py` | project folders: copy (or decompress `.laz`→`.las`) an imported file, never touch the source |
 | `startup_ui.py` | startup dialog: pick a recent entry or start a new project |

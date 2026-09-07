@@ -56,11 +56,63 @@ ShiftPrompt = Callable[[np.ndarray, np.ndarray, np.ndarray], "tuple[float, float
 #: entirely, so every existing caller and test loads every point.
 DensityPrompt = Callable[[float, int, float], "float | None"]
 
+#: ``(message, fraction) -> None``, fraction 0..1 — where a long open or save
+#: has got to. Wired to a progress window by the app; omitting it (the
+#: default) reports nothing, so headless callers and tests are unaffected.
+ProgressFn = Callable[[str, float], None]
+
+# The phases of an open and roughly what share of the time each takes, so
+# the bar moves at a believable rate. Measured on a 39M-point PLY: decoding
+# coordinates 0.5s, labels 2.4s, measuring density 1.9s, decimating 12.7s,
+# indexing 4.0s, or 2 / 11 / 9 / 59 / 18 percent. Only the ratios matter.
+_LOAD_PHASES = (
+    ("Reading coordinates", 0.05),
+    ("Reading tree labels", 0.10),
+    ("Measuring point density", 0.10),
+    ("Downsampling", 0.55),
+    ("Indexing trees", 0.20),
+)
+
+# Where a save's own phases sit on the bar: everything before is the
+# interpolation pass, which is the only part that scales with the file.
+_SAVE_WRITE_AT = 0.85
+_SAVE_FINALIZE_AT = 0.95
+
 # Full-resolution points decoded at a time when a decimated session's edits
 # are interpolated back on save (see _BaseCatalog._expand_to_full). Big
 # enough that the per-chunk overhead vanishes, small enough that the decoded
 # float64 coordinates stay a few hundred MB.
 _EXPAND_CHUNK = 4_000_000
+
+
+class _PhaseReporter:
+    """Turns named load phases into the 0..1 fractions a progress callback
+    wants, so the phases themselves stay readable.
+
+    A phase that gets skipped (there is no downsampling on a cloud that
+    doesn't need it) simply never reports, and the next one starts from its
+    own place on the bar — a jump forward, which is honest: that work isn't
+    happening.
+    """
+
+    def __init__(self, fn: ProgressFn | None):
+        self._fn = fn
+        self._start = {}
+        acc = 0.0
+        for name, weight in _LOAD_PHASES:
+            self._start[name] = acc
+            acc += weight
+
+    def __call__(self, phase: str, within: float = 0.0) -> None:
+        if self._fn is None:
+            return
+        start = self._start[phase]
+        weight = dict(_LOAD_PHASES)[phase]
+        self._fn(phase + "…", start + weight * max(0.0, min(1.0, within)))
+
+    def done(self) -> None:
+        if self._fn is not None:
+            self._fn("Ready", 1.0)
 
 
 def needs_global_shift(mins: np.ndarray, maxs: np.ndarray) -> bool:
@@ -108,9 +160,11 @@ class _BaseCatalog:
         label_field: str | None = None,
         shift_prompt: ShiftPrompt | None = None,
         density_prompt: DensityPrompt | None = None,
+        progress: ProgressFn | None = None,
     ):
         self.path = path
         self._label_field_req = label_field
+        report = _PhaseReporter(progress)
         # Subclass fills in: offset, count, dtype, _names, is_rgb, label_field,
         # and _mm (the memmap of fixed-size point records).
         self._open()
@@ -118,25 +172,31 @@ class _BaseCatalog:
         # Decode once at full (float64) precision — shifting after the fact
         # would already have lost whatever a premature float32 cast rounded
         # away — then resolve/apply the global shift and store as float32.
+        report("Reading coordinates")
         raw_coords = self._decode_coords_raw(self._mm)
         self.global_shift = self._resolve_global_shift(raw_coords, shift_prompt)
         self.coords = self._shift_and_cast(raw_coords)
         del raw_coords
 
+        report("Reading tree labels")
         self.labels, self.label_colors = self._decode_labels(self._mm)
         self.labels = np.asarray(self.labels).astype(np.int32)
 
         # New tree IDs must clear every label in the *file*, including trees
         # that decimation may be about to drop from the working set below.
         self._next_id = int(self.labels.max()) + 1 if self.labels.size else 1
-        self._resolve_decimation(density_prompt)
+        self._resolve_decimation(density_prompt, report)
 
         # Snapshot to diff against on save — see save().
         self._original_labels = self.labels.copy()
+        report("Indexing trees")
         self._build_index()
+        report.done()
 
     # -- decimation ("this cloud is very dense") ---------------------------
-    def _resolve_decimation(self, density_prompt: DensityPrompt | None) -> None:
+    def _resolve_decimation(
+        self, density_prompt: DensityPrompt | None, report=None
+    ) -> None:
         """Offer to review a very dense cloud voxel-decimated, and take the
         offer up if the prompt accepts it.
 
@@ -171,6 +231,8 @@ class _BaseCatalog:
         ):
             return
 
+        if report is not None:
+            report("Measuring point density")
         self.spacing = density.estimate_spacing(self.coords)
         if not (0.0 < self.spacing < density.DENSE_SPACING):
             return
@@ -180,6 +242,8 @@ class _BaseCatalog:
         if chosen is None:
             return
 
+        if report is not None:
+            report("Downsampling")
         keep = density.voxel_indices(self.coords, float(chosen))
         if keep.size >= self.count:
             return  # nothing to gain; stay at full resolution
@@ -394,7 +458,9 @@ class _BaseCatalog:
             self._next_id = max(self._next_id, int(self.labels.max()) + 1)
 
     # -- saving --------------------------------------------------------
-    def save(self, output: str | None = None, progress=None) -> str:
+    def save(
+        self, output: str | None = None, progress: ProgressFn | None = None
+    ) -> str:
         """Write only the points whose label changed since the last save.
 
         Diffs against the snapshot taken at open time / after the previous
@@ -403,8 +469,9 @@ class _BaseCatalog:
 
         On a decimated session the diff covers the kept points only, so it is
         first interpolated back onto every full-resolution point it stands
-        for — see :meth:`_expand_to_full`. ``progress``, if given, is called
-        with a status string during that (slower) pass.
+        for — see :meth:`_expand_to_full`. ``progress`` (:data:`ProgressFn`)
+        is called through that pass and the write, which on a big file are
+        the parts worth watching.
         """
         changed = np.flatnonzero(self.labels != self._original_labels)
         target = output or self.path
@@ -417,6 +484,8 @@ class _BaseCatalog:
             # A full copy of the whole file, not just whatever's loaded —
             # needed even with zero edits so "Save As" still exports a
             # complete copy at the new path, not nothing.
+            if progress is not None:
+                progress(f"Copying to {os.path.basename(target)}…", 0.0)
             shutil.copyfile(self.path, target)
 
         if changed.size == 0:
@@ -424,11 +493,15 @@ class _BaseCatalog:
             return f"Saved (no changes) → {target}"
 
         rows, values = self._changed_rows(changed, progress)
+        if progress is not None:
+            progress(f"Writing {rows.size:,} points…", _SAVE_WRITE_AT)
         out = np.memmap(target, dtype=self.dtype, mode="r+",
                          offset=self.offset, shape=(self.count,))
         self._write_labels(out, rows, values)
         out.flush()
         del out
+        if progress is not None:
+            progress("Finishing…", _SAVE_FINALIZE_AT)
         self._finalize_save(target, is_new_target)
 
         if not is_new_target:
@@ -438,7 +511,9 @@ class _BaseCatalog:
             self._original_labels = self.labels.copy()
         return f"Saved {rows.size:,} changed point(s) → {target}"
 
-    def _changed_rows(self, changed: np.ndarray, progress=None):
+    def _changed_rows(
+        self, changed: np.ndarray, progress: ProgressFn | None = None
+    ):
         """``(file_rows, new_labels)`` to patch for the changed working-set
         positions ``changed`` — the positions themselves at full resolution,
         their full-resolution neighbourhoods when decimated."""
@@ -446,7 +521,9 @@ class _BaseCatalog:
             return changed, self.labels[changed]
         return self._expand_to_full(changed, progress)
 
-    def _expand_to_full(self, changed: np.ndarray, progress=None):
+    def _expand_to_full(
+        self, changed: np.ndarray, progress: ProgressFn | None = None
+    ):
         """Interpolate a decimated session's edits back onto every point.
 
         Each full-resolution point follows the nearest working point that was
@@ -489,8 +566,8 @@ class _BaseCatalog:
             stop = min(start + _EXPAND_CHUNK, self.count)
             if progress is not None:
                 progress(
-                    f"Interpolating edits back to full resolution… "
-                    f"{100 * start // max(self.count, 1)}%"
+                    "Interpolating edits back to full resolution…",
+                    _SAVE_WRITE_AT * start / max(self.count, 1),
                 )
             block = self._mm[start:stop]
             coords = self._decode_coords(block)
@@ -728,6 +805,7 @@ def open_catalog(
     label_field: str | None = None,
     shift_prompt: ShiftPrompt | None = None,
     density_prompt: DensityPrompt | None = None,
+    progress: ProgressFn | None = None,
 ) -> _BaseCatalog:
     """Open ``path`` with the backend its extension calls for.
 
@@ -743,12 +821,16 @@ def open_catalog(
     cloud finer than :data:`segfix.density.DENSE_SPACING` for the session
     (edits are interpolated back onto every point on save); omit it and the
     whole cloud is reviewed at full resolution, exactly as before.
+
+    ``progress`` is called as the load moves between phases — see
+    :data:`ProgressFn` and :mod:`segfix.progress_ui`.
     """
     ext = os.path.splitext(path)[1].lower()
     kwargs = dict(
         label_field=label_field,
         shift_prompt=shift_prompt,
         density_prompt=density_prompt,
+        progress=progress,
     )
     if ext == ".ply":
         return TreeCatalog(path, **kwargs)

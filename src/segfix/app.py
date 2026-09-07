@@ -337,6 +337,8 @@ def _run_scene(args) -> int:
     """Default (only) mode: a tree table where picking a row loads that tree
     plus its spatial neighbours into the 3D view, instead of the whole cloud.
     """
+    import os
+
     import numpy as np
     from qtpy.QtCore import Qt
     from qtpy.QtWidgets import QApplication, QLabel, QMainWindow, QMessageBox
@@ -345,8 +347,9 @@ def _run_scene(args) -> int:
     from .cloudview import CloudView
     from .density_ui import prompt_downsample
     from .icons import app_icon
-    from .overlays import ScaleBarOverlay
     from .model import PointCloud
+    from .overlays import ScaleBarOverlay
+    from .progress_ui import progress_window
     from .scene_ui import SceneController, SceneWidget
     from .shift_ui import prompt_global_shift
     from .treecatalog import open_catalog
@@ -407,15 +410,31 @@ def _run_scene(args) -> int:
 
     win.showMaximized()
     busy(view, f"Scanning trees in {args.cloud}…")
+
+    # Both prompts run from inside the load, so each one steps out of the
+    # progress window's way first — a bar sitting frozen at 10% behind a
+    # question reads as a hang, which is the impression this whole window
+    # exists to dispel.
+    def _ask(dialog, *dialog_args):
+        loading.pause()
+        try:
+            return dialog(win, *dialog_args)
+        finally:
+            loading.resume()
+
     try:
-        catalog = open_catalog(
-            args.cloud,
-            label_field=args.label_field,
-            shift_prompt=lambda mins, maxs, suggested:
-                prompt_global_shift(win, mins, maxs, suggested),
-            density_prompt=lambda spacing, n_points, suggested:
-                prompt_downsample(win, spacing, n_points, suggested),
-        )
+        with progress_window(
+            win, "Opening cloud", os.path.basename(args.cloud)
+        ) as loading:
+            catalog = open_catalog(
+                args.cloud,
+                label_field=args.label_field,
+                shift_prompt=lambda mins, maxs, suggested:
+                    _ask(prompt_global_shift, mins, maxs, suggested),
+                density_prompt=lambda spacing, n_points, suggested:
+                    _ask(prompt_downsample, spacing, n_points, suggested),
+                progress=loading.report,
+            )
     except Exception as exc:
         # A wrong/corrupt file used to raise this far with the window already
         # shown maximized and app.exec() not yet reached — no event loop was
