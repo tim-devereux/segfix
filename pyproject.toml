@@ -41,6 +41,7 @@ dependencies = [
 [project.urls]
 Homepage = "https://github.com/tim-devereux/segfix"
 Issues = "https://github.com/tim-devereux/segfix/issues"
+PyPI = "https://pypi.org/project/segfix/"
 
 [project.optional-dependencies]
 dev = ["pytest>=7.0"]

@@ -1,5 +1,7 @@
 # segfix
 
+[![PyPI](https://img.shields.io/pypi/v/segfix)](https://pypi.org/project/segfix/)
+
 A GUI tool to **fix the instance segmentation of tree point clouds**. Load a
 segmented LiDAR cloud, see each tree in its own colour, and correct mistakes by
 lassoing points and reassigning, splitting off, or dismissing them — then save
@@ -15,7 +17,8 @@ Feedback, issues, and PRs all welcome. For issues please use [GitHub issues](htt
 
 ## Install
 
-Requires Python 3.10–3.12.
+Requires Python 3.10–3.12. The package is on PyPI:
+[pypi.org/project/segfix](https://pypi.org/project/segfix/).
 
 ```bash
 pip install segfix
