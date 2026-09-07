@@ -53,6 +53,18 @@ python scripts/make_sample.py sample.ply
 python scripts/make_sample.py --format las sample.las   # arbor-shaped LAS
 ```
 
+Add `--spacing` for a scan-like cloud, sampled at that pitch across the
+trunk, crown and ground surfaces — the way to get a file dense enough to
+exercise the downsample prompt described under [Dense clouds](#dense-clouds):
+
+```bash
+python scripts/make_sample.py --spacing 0.01 dense.las   # ~4M points, ~140 MB
+python scripts/make_sample.py --spacing 0.005 dense.las  # ~16M points, ~540 MB
+```
+
+It reports the spacing it actually achieved, measured with the same estimator
+segfix runs on load.
+
 `segfix` will open a startup dialog. Double-click
 a recent project to reopen it, or click **New Project…** to import a point cloud
 file. Importing copies the file into a new project folder (created inside the

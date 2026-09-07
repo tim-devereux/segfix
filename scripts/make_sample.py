@@ -8,10 +8,20 @@ points, and a handful of noise points floating with nothing near them.
 
 Usage:  python scripts/make_sample.py sample.ply
         python scripts/make_sample.py --format las sample.las
+        python scripts/make_sample.py --spacing 0.01 dense.las
 
 The ``.las`` form mimics arbor's output: XYZ plus a ``treeID`` Extra-Bytes
 column, so the LAS editing path (:class:`segfix.treecatalog.LasCatalog`) has
 something to open without running the arbor pipeline.
+
+``--spacing`` switches to a scan-like cloud: instead of a few thousand points
+filling each tree's volume, points are laid on the surfaces a scanner
+actually sees (trunk, crown shell, ground) at the requested pitch. That is
+what makes a cloud *dense* — a metre of trunk is one ring of points, but at
+5mm there are two hundred of them — and it is how to get a file that trips
+segfix's "points closer than 2cm" check and its downsample offer (see
+:mod:`segfix.density`). The same deliberate segmentation errors are in it,
+so the whole fix-and-save round trip can be exercised at full density.
 """
 
 import argparse
@@ -57,6 +67,100 @@ def floaters(bounds, n=15, z_range=(3.0, 12.0), rng=None):
     return np.column_stack([x, y, z]).astype(np.float32)
 
 
+def _jittered_grid(u_size, v_size, spacing, rng):
+    """``(u, v)`` samples covering a ``u_size`` x ``v_size`` patch at roughly
+    ``spacing`` pitch.
+
+    A jittered grid rather than uniform-random points: random points on a
+    surface clump, and their median nearest-neighbour distance comes out
+    around half the pitch you asked for, which would make "generate a 1cm
+    cloud" quietly produce a 5mm one. Jittering a grid by a fraction of a
+    cell keeps the measured spacing close to the requested one while still
+    looking scanned rather than plotted.
+    """
+    nu = max(1, int(round(u_size / spacing)))
+    nv = max(1, int(round(v_size / spacing)))
+    u, v = np.meshgrid(
+        (np.arange(nu) + 0.5) * (u_size / nu),
+        (np.arange(nv) + 0.5) * (v_size / nv),
+        indexing="ij",
+    )
+    u = u.ravel() + rng.uniform(-0.2, 0.2, u.size) * spacing
+    v = v.ravel() + rng.uniform(-0.2, 0.2, v.size) * spacing
+    return u, v
+
+
+def dense_tree(center, height=8.0, radius=2.0, spacing=0.01, rng=None):
+    """A tree as a scanner sees it: a trunk cylinder and a conical crown
+    shell, both sampled at ``spacing``.
+
+    Surfaces, not a filled volume — that is the difference between a cloud
+    that is merely large and one that is genuinely dense. Filling the same
+    cone's 34 cubic metres at 5mm would take 270 million points; its
+    surfaces take two million.
+    """
+    rng = rng or np.random.default_rng()
+    trunk_r = max(0.04, radius * 0.07)
+    crown_base = 0.3 * height
+
+    # Trunk: unroll the cylinder to a (circumference x height) patch.
+    u, z = _jittered_grid(2 * np.pi * trunk_r, height, spacing, rng)
+    theta = u / trunk_r
+    r = trunk_r + rng.normal(0, spacing * 0.3, theta.size)  # bark roughness
+    trunk = np.column_stack([
+        center[0] + r * np.cos(theta),
+        center[1] + r * np.sin(theta),
+        center[2] + z,
+    ])
+
+    # Crown: the cone's lateral surface, unrolled the same way. Its radius
+    # tapers to nothing at the top, so the grid is laid out in slant length
+    # against the *widest* circumference and then thinned per ring - which
+    # is also what keeps the crown from turning into a solid cap up top.
+    crown_h = height - crown_base
+    slant = float(np.hypot(radius, crown_h))
+    u, s = _jittered_grid(2 * np.pi * radius, slant, spacing, rng)
+    frac = np.clip(s / slant, 0, 1)          # 0 at the base, 1 at the tip
+    ring_r = radius * (1 - frac)
+    # Keep each ring's points at the requested pitch: a ring of radius
+    # ring_r only has room for a fraction of the widest ring's points.
+    keep = rng.random(u.size) < np.maximum(ring_r / radius, 1e-6)
+    theta = u[keep] / radius
+    ring_r, frac = ring_r[keep], frac[keep]
+    jitter = rng.normal(0, spacing * 0.5, theta.size)
+    crown = np.column_stack([
+        center[0] + (ring_r + jitter) * np.cos(theta),
+        center[1] + (ring_r + jitter) * np.sin(theta),
+        center[2] + crown_base + frac * crown_h,
+    ])
+    return np.vstack([trunk, crown]).astype(np.float32)
+
+
+def dense_ground(centers, spacing=0.01, reach=3.0, rng=None):
+    """Ground under the trees, at ``spacing``: one grid over the whole plot,
+    keeping only what falls within ``reach`` of a trunk.
+
+    Near the trees rather than across the whole rectangle, because that is
+    all the review workflow ever lassoes — and at these pitches the empty
+    gaps between trees would otherwise be most of the file. One shared grid
+    rather than a disc each, so overlapping discs can't quietly double the
+    density where two trees stand close together.
+    """
+    rng = rng or np.random.default_rng()
+    centers = np.asarray(centers, dtype=np.float64)
+    lo = centers[:, :2].min(axis=0) - reach
+    hi = centers[:, :2].max(axis=0) + reach
+    u, v = _jittered_grid(hi[0] - lo[0], hi[1] - lo[1], spacing, rng)
+    x, y = lo[0] + u, lo[1] + v
+
+    near = np.zeros(x.size, dtype=bool)
+    for cx, cy, _cz in centers:
+        near |= (x - cx) ** 2 + (y - cy) ** 2 <= reach * reach
+    x, y = x[near], y[near]
+    z = centers[:, 2].mean() + rng.normal(0, spacing, x.size)  # slight relief
+    return np.column_stack([x, y, z]).astype(np.float32)
+
+
 def _write_las(coords: np.ndarray, labels: np.ndarray, out: str) -> None:
     """Write an arbor-shaped LAS/LAZ: XYZ + an int ``treeID`` Extra-Bytes
     column (``0`` = unassigned, as arbor writes it)."""
@@ -76,7 +180,19 @@ def _write_las(coords: np.ndarray, labels: np.ndarray, out: str) -> None:
     las.write(out)
 
 
-def main(out):
+# Where the trees stand, and how wide, shared by both modes: three clean
+# trees, one that is over-segmented, and a close pair sharing an ID.
+_CENTERS = [
+    ((0, 0, 0), 2.0),
+    ((10, 0, 0), 2.0),
+    ((0, 10, 0), 2.0),
+    ((10, 10, 0), 2.0),
+    ((20, 5, 0), 1.5),
+    ((22.5, 5, 0), 1.5),
+]
+
+
+def main(out, spacing=None):
     rng = np.random.default_rng(42)
     parts, labels = [], []
 
@@ -84,24 +200,32 @@ def main(out):
         parts.append(pts)
         labels.append(np.full(len(pts), lab, dtype=np.int32))
 
+    def make(center, radius):
+        if spacing is None:
+            return tree(center, radius=radius, rng=rng)
+        return dense_tree(center, radius=radius, spacing=spacing, rng=rng)
+
     # Three clean trees: IDs 1, 2, 3
-    add(tree((0, 0, 0), rng=rng), 1)
-    add(tree((10, 0, 0), rng=rng), 2)
-    add(tree((0, 10, 0), rng=rng), 3)
+    for lab, (center, radius) in zip((1, 2, 3), _CENTERS[:3]):
+        add(make(center, radius), lab)
 
     # Over-segmented: one physical tree at (10,10) split into IDs 4 and 5
-    t = tree((10, 10, 0), rng=rng)
+    t = make(*_CENTERS[3])
     add(t[t[:, 2] < 4], 4)
     add(t[t[:, 2] >= 4], 5)
 
     # Under-segmented: two trees both labelled ID 6
-    add(tree((20, 5, 0), radius=1.5, rng=rng), 6)
-    add(tree((22.5, 5, 0), radius=1.5, rng=rng), 6)
+    for center, radius in _CENTERS[4:]:
+        add(make(center, radius), 6)
 
     # Ground/understory (unassigned) and a few stray noise points, spread
     # across the footprint of every tree above.
     bounds = ((-3, 25), (-3, 13))
-    add(ground(bounds, rng=rng), UNASSIGNED)
+    if spacing is None:
+        add(ground(bounds, rng=rng), UNASSIGNED)
+    else:
+        add(dense_ground([c for c, _ in _CENTERS], spacing=spacing, rng=rng),
+            UNASSIGNED)
     add(floaters(bounds, rng=rng), NOISE)
 
     coords = np.vstack(parts)
@@ -121,8 +245,21 @@ def main(out):
     n_noise = int(np.sum(labels == NOISE))
     print(
         f"Wrote {n_points:,} points, trees {tree_ids} "
-        f"+ {n_unassigned:,} unassigned + {n_noise:,} noise → {out}"
+        f"+ {n_unassigned:,} unassigned + {n_noise:,} noise → {out} "
+        f"({os.path.getsize(out) / 1e6:,.0f} MB)"
     )
+    if spacing is not None:
+        # Measured with the same estimator segfix runs on load, so the
+        # number printed here is the one the app will report back.
+        from segfix.density import DENSE_SPACING, estimate_spacing
+
+        measured = estimate_spacing(coords)
+        verdict = (
+            "below segfix's 2cm threshold: opening this offers to downsample"
+            if measured < DENSE_SPACING else
+            "above segfix's 2cm threshold: no downsample will be offered"
+        )
+        print(f"Measured point spacing {measured * 100:.2f} cm - {verdict}")
 
 
 if __name__ == "__main__":
@@ -130,5 +267,16 @@ if __name__ == "__main__":
     ap.add_argument("out", nargs="?", help="output path (extension picks format)")
     ap.add_argument("--format", choices=["ply", "las"], default="ply",
                     help="format when OUT is omitted (default: ply)")
+    ap.add_argument(
+        "--spacing", type=float, default=None, metavar="METRES",
+        help="generate a scan-like cloud with points this far apart on the "
+             "trunk, crown and ground surfaces, instead of a few thousand "
+             "points per tree. 0.01 gives ~4M points (~140 MB LAS); 0.005 "
+             "gives ~16M (~540 MB). Anything under 0.02 trips segfix's "
+             "dense-cloud check.",
+    )
     args = ap.parse_args()
-    main(args.out or f"sample.{args.format}")
+    if args.spacing is not None and args.spacing <= 0:
+        ap.error("--spacing must be positive")
+    default_name = "dense" if args.spacing is not None else "sample"
+    main(args.out or f"{default_name}.{args.format}", spacing=args.spacing)
