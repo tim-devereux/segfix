@@ -48,35 +48,6 @@ pip install -e .
 segfix
 ```
 
-From a source checkout you can generate a practice cloud with built-in
-segmentation errors first:
-
-```bash
-python scripts/make_sample.py sample.ply
-python scripts/make_sample.py --format las sample.las   # arbor-shaped LAS
-```
-
-Add `--spacing` for a scan-like cloud, sampled at that pitch across the
-trunk, crown and ground surfaces — the way to get a file dense enough to
-exercise the downsample prompt described under [Dense clouds](#dense-clouds):
-
-```bash
-python scripts/make_sample.py --spacing 0.01 dense.las   # ~4M points, ~140 MB
-python scripts/make_sample.py --spacing 0.005 dense.las  # ~16M points, ~540 MB
-```
-
-It reports the spacing it actually achieved, measured with the same estimator
-segfix runs on load. Add `--origin` to stand the plot somewhere georeferenced,
-which is what raises the *other* load-time question, the global shift:
-
-```bash
-python scripts/make_sample.py --spacing 0.01 --origin 204300 7223250 12 dense_utm.las
-```
-
-That one asks both questions in a single open — LAS only past 10 km from the
-origin, since this script's PLY writer stores xyz as float32 and would deliver
-the cloud already quantised to metres.
-
 `segfix` will open a startup dialog. Double-click
 a recent project to reopen it, or click **New Project…** to import a point cloud
 file. Importing copies the file into a new project folder (created inside the
@@ -149,12 +120,6 @@ every original point: each full-resolution point follows the nearest kept point
 actually re-labelled — so untouched parts of the cloud keep their original
 labels byte for byte. The saved file has all of its points and all of its
 fields, in the format it came in.
-
-Opening and saving a cloud this size take long enough to look like a freeze, so
-both run behind a progress window naming the phase they are in (reading
-coordinates, measuring density, downsampling, indexing trees). The work happens
-on the GUI thread, so the bar advances between phases rather than smoothly
-through them — a phase that is one numpy call cannot repaint while it runs.
 
 If the cloud is also georeferenced far from the origin, the global-shift
 question comes first and this one follows. Decline the shift and the
