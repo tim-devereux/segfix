@@ -121,12 +121,6 @@ actually re-labelled — so untouched parts of the cloud keep their original
 labels byte for byte. The saved file has all of its points and all of its
 fields, in the format it came in.
 
-If the cloud is also georeferenced far from the origin, the global-shift
-question comes first and this one follows. Decline the shift and the
-downsample offer is skipped entirely: unshifted coordinates that large have
-already lost sub-metre detail to the float32 cast, so a spacing measured on
-them would be reading quantisation rather than the cloud.
-
 The one thing to know is that a voxel is the resolution limit while you work:
 where two trees' points share a voxel, one label represents it, and unassigned
 points that fall inside a tree's voxels aren't separately selectable until you
