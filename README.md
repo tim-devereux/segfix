@@ -4,7 +4,7 @@
 
 A GUI tool to **fix the instance segmentation of tree point clouds**. Load a
 segmented LiDAR cloud, see each tree in its own colour, and correct mistakes by
-lassoing points and reassigning, splitting off, or dismissing them — then save
+lassoing points and reassigning, splitting off, or dismissing them, then save
 back to a corrected version of the input, retaining all fields.
 
 <img width="2008" height="1044" alt="Segfix Screenshot" src="https://github.com/user-attachments/assets/03a63367-6350-4198-99ad-c29a593d971d" />
@@ -51,24 +51,24 @@ segfix
 `segfix` will open a startup dialog. Double-click
 a recent project to reopen it, or click **New Project…** to import a point cloud
 file. Importing copies the file into a new project folder (created inside the
-directory you pick, named after the source file) and opens that copy — edits are
+directory you pick, named after the source file) and opens that copy, edits are
 always saved to the copy, never the original source file.
 
 Every project opened this way is recorded in `~/.config/segfix/registry.json`
 (a plain JSON file) so it shows up in the "Recent projects"
-list next time — most-recently-opened at the top and preselected, each row
+list next time, most-recently-opened at the top and preselected, each row
 showing how long ago it was last opened.
 
 The per-point tree ID field is auto-detected (`treeID`, `PredInstance`,
 `label`, …); override with `--label-field NAME` if needed. Labels that can't
-be a real tree ID — negatives (other than the noise marker) and values that
+be a real tree ID, negatives (other than the noise marker) and values that
 overflow a signed 32-bit int, both of which some pipelines use as a "no tree"
-sentinel — are folded into *unassigned* on load, so they don't show up as
+sentinel, are folded into *unassigned* on load, so they don't show up as
 spurious trees.
 
 ### Accepted formats
 
-**Binary PLY** — RGB-segmented (raycloudtools) or with a label field — and
+**Binary PLY**, RGB-segmented (raycloudtools) or with a label field, and
 **LAS**. Both store their points as fixed-size records at a known offset, which
 is what lets `treecatalog.py` memory-map a whole plot, read back just the points
 of one tree, and on save patch only the label bytes that changed.
@@ -76,7 +76,7 @@ of one tree, and on save patch only the label bytes that changed.
 ### raycloudtools output
 
 [raycloudtools](https://github.com/csiro-robotics/raycloudtools)' `rayextract
-trees` writes `<plot>_segmented.ply` — a binary PLY with no label column, each
+trees` writes `<plot>_segmented.ply`, a binary PLY with no label column, each
 point instead **coloured by tree** (`x y z time nx ny nz red green blue alpha`,
 double xyz). segfix detects the RGB encoding, maps each distinct colour to a
 tree, and treats pure black `(0, 0, 0)` as unsegmented. Import the `.ply`
@@ -92,7 +92,7 @@ colour derived from their id.
 ### arbor output
 
 [arbor](https://github.com/r-lidar/arbor)'s pipeline (`arbor segment …`) writes
-`<plot>_output/<plot>_segmented.laz` — a point cloud with a per-point `treeID`
+`<plot>_output/<plot>_segmented.laz`, a point cloud with a per-point `treeID`
 Extra-Bytes column (`0` = unassigned). Import that `.laz` directly: segfix
 decompresses it to a `.las` working copy in the project folder (the original
 `.laz` is never touched), you fix the `treeID`s with the workflow below, and
@@ -100,7 +100,7 @@ decompresses it to a `.las` working copy in the project folder (the original
 it for arbor to re-read.
 
 One caveat: if a cloud's `treeID` column is an *unsigned* type, points you
-dismiss as noise (`X`) are written back as `0` (unassigned) — segfix's own
+dismiss as noise (`X`) are written back as `0` (unassigned), segfix's own
 `.segfix.json` sidecar still remembers they were noise, but a reader of the LAS
 alone cannot tell noise from unassigned. (arbor writes a signed `treeID`, so
 this does not apply to its output.)
@@ -108,7 +108,7 @@ this does not apply to its output.)
 ### Dense clouds
 
 On load segfix measures the cloud's typical point spacing. If points are closer
-than **2 cm** it offers to downsample for the session — one point per voxel (2 cm
+than **2 cm** it offers to downsample for the session, one point per voxel (2 cm
 by default, editable in the prompt), which is plenty to see and re-label a tree
 but a fraction of the points to draw and lasso. Choose **Keep Full Resolution**
 and nothing changes.
@@ -117,7 +117,7 @@ Downsampling is a working-set choice, not a destructive one. Nothing is written
 until you save, and on **Save** the labels you edited are interpolated back onto
 every original point: each full-resolution point follows the nearest kept point
 *that was the same tree as it*, and only where that kept point is one you
-actually re-labelled — so untouched parts of the cloud keep their original
+actually re-labelled, so untouched parts of the cloud keep their original
 labels byte for byte. The saved file has all of its points and all of its
 fields, in the format it came in.
 
@@ -143,8 +143,8 @@ sit in the bottom-left of the view; the **point size** spinner floats in the
 top-left.
 
 The right-hand panel holds two tables. **All Trees** (top) lists every tree in the
-file — a Done column (`✓` when reviewed), tree ID and point count, with a
-running `N/M trees (X %) done` line above it — **double-click a row** to load
+file, a Done column (`✓` when reviewed), tree ID and point count, with a
+running `N/M trees (X %) done` line above it, **double-click a row** to load
 that
 tree plus its spatial neighbours into the 3D view. **Selected Tree +
 Neighbours** (below) is the review queue for what's currently loaded: a Done
@@ -158,11 +158,11 @@ to the right edge of the 3D view, next to the points they act on.
 
 1. Double-click a tree in **All Trees**. The camera flies to it and a
    wireframe box marks it. To declutter a crowded view, use the 👁 (hide) or
-   **Fade** column in the lower table on specific trees — or **Hide others** /
+   **Fade** column in the lower table on specific trees, or **Hide others** /
    **Fade others** in the top-bar **View** group to do it to every loaded tree
    except the one under review. Fading keeps a tree visible as faint context
    and still lets the lasso grab its points; hiding removes it from both.
-2. Inspect it. If it's correct, press **Space** — the tree is marked done,
+2. Inspect it. If it's correct, press **Space**, the tree is marked done,
    progress is saved, and the next unfinished tree in the loaded set becomes
    current. That's the loop.
 3. If it needs fixing, **select** points with the lasso: press **L**, drag a
@@ -174,12 +174,12 @@ to the right edge of the 3D view, next to the points they act on.
    | `Space` | Mark current tree done, jump to next unfinished |
    | `←` / `→` | Previous / next tree (without marking done) |
    | `L` | Lasso select |
-   | `Ctrl+L` | Lasso, but only points already in the current tree — grabs a clean patch out of an overlapping crown |
+   | `Ctrl+L` | Lasso, but only points already in the current tree, grabs a clean patch out of an overlapping crown |
    | `Esc` | Back to camera / navigation |
    | `A` | Add selection to the current tree (missing branches, unassigned canopy) |
    | `N` | Split selection off as a new tree (it joins the queue unreviewed) |
-   | `U` | Unassign selection — or the whole current tree if nothing is selected |
-   | `X` | Mark selection as noise — or the whole current tree if nothing is selected (dismiss a bush/wall in one key) |
+   | `U` | Unassign selection, or the whole current tree if nothing is selected |
+   | `X` | Mark selection as noise, or the whole current tree if nothing is selected (dismiss a bush/wall in one key) |
    | `Delete` / `Backspace` | Same as `X` (mark noise) |
    | `H` | Show/hide the unassigned + noise points |
    | `C` | Cross section on/off |
@@ -190,7 +190,7 @@ to the right edge of the 3D view, next to the points they act on.
    | `Ctrl+O` | Open another project |
 
    To move stray points *to a neighbour* instead, lasso them and click one of
-   the **→ id** buttons in the Current tree panel — one per tree within
+   the **→ id** buttons in the Current tree panel, one per tree within
    "reach" metres of this one. Clicking that neighbour's table row to make it
    current and pressing `A` does the same thing.
 
@@ -199,8 +199,8 @@ to the right edge of the 3D view, next to the points they act on.
 4. For a crowded canopy, two tools in the top bar cut the view down. Both fold
    into the same visibility as the 👁 column, so hidden points are also
    unselectable and the lasso can't grab through them:
-   - **Cross section (`C`)** — a slab along X, Y or Z, set with two sliders.
-   - **Lasso section (`Shift+C`)** — same idea, but the kept region is an
+   - **Cross section (`C`)**, a slab along X, Y or Z, set with two sliders.
+   - **Lasso section (`Shift+C`)**, same idea, but the kept region is an
      outline you draw (`Shift+L`, then drag). It's frozen into a point mask
      as you release, so the camera moves freely afterwards.
 
