@@ -24,6 +24,12 @@ Requires Python 3.10–3.12. The package is on PyPI:
 pip install segfix
 ```
 
+The startup dialog tells you when a newer release is on PyPI, and its
+**Update…** button runs `pip install --upgrade` for you (restart segfix
+afterwards). Running from a clone instead, it tracks new commits on the branch
+you're on and updates with `git pull` + `pip install -e .`, so a development
+checkout stays a checkout.
+
 Using a dedicated environment:
 
 ```bash
@@ -249,6 +255,7 @@ to the right edge of the 3D view, next to the points they act on.
 | `registry.py` | on-disk list of recently opened files/projects |
 | `workspace.py` | project folders: copy (or decompress `.laz`→`.las`) an imported file, never touch the source |
 | `startup_ui.py` | startup dialog: pick a recent entry or start a new project |
+| `update.py` | update check: a newer PyPI release for an installed copy, new commits for a git checkout |
 | `app.py` | `segfix` CLI entry point |
 
 ## Tests

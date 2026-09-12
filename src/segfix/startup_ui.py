@@ -63,9 +63,10 @@ class StartupDialog(QDialog):
         hint.setStyleSheet("color: gray;")
         layout.addWidget(hint)
 
-        # Update banner: hidden until the background check (below) finds the
-        # checkout is behind its upstream. Stays hidden entirely for anyone
-        # not running from a git clone (packaged some other way, or offline).
+        # Update banner: hidden until the background check (below) finds a
+        # newer PyPI release (installed copies) or new upstream commits (git
+        # checkouts) — see segfix.update. Stays hidden when offline or when
+        # there's nothing newer.
         update_row = QHBoxLayout()
         self.update_label = QLabel("")
         self.update_label.setStyleSheet("color: #b8860b;")
@@ -195,33 +196,27 @@ class StartupDialog(QDialog):
         if status is None:
             return
         self._update_status = status
-        n = status.commits_behind
-        self.update_label.setText(
-            f"Update available ({n} commit{'s' if n != 1 else ''} behind)."
-        )
+        self.update_label.setText(status.describe())
         self.update_label.show()
         self.update_btn.show()
 
     def _apply_update(self) -> None:
         # Blocking is deliberate: this only runs after an explicit click, a
-        # `git pull` + reinstall is normally a few seconds, and there's no
-        # meaningful "cancel a pull halfway through" to offer instead.
+        # pip upgrade (or `git pull` + reinstall) is normally a few seconds,
+        # and there's no meaningful "cancel an install halfway through" to
+        # offer instead.
         self.update_btn.setEnabled(False)
         self.update_label.setText("Updating…")
         QApplication.setOverrideCursor(Qt.WaitCursor)
         QApplication.processEvents()
         try:
-            update.apply_update(self._update_status.repo_root)
+            update.apply_update(self._update_status)
         except Exception as exc:
             QApplication.restoreOverrideCursor()
             detail = exc.stderr if hasattr(exc, "stderr") and exc.stderr else str(exc)
             QMessageBox.critical(self, "Update failed", detail)
             self.update_btn.setEnabled(True)
-            self.update_label.setText(
-                f"Update available ({self._update_status.commits_behind} "
-                f"commit{'s' if self._update_status.commits_behind != 1 else ''} "
-                "behind)."
-            )
+            self.update_label.setText(self._update_status.describe())
             return
         QApplication.restoreOverrideCursor()
         self.update_label.setText("Updated. Restart segfix to use it.")
