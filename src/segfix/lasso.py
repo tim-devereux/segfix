@@ -252,19 +252,20 @@ class LassoTool:
 
 class ClusterTool:
     """Click a point to select the connected patch of same-tree points around
-    it; click again in the same spot to grow the patch wider.
+    it; click again in the same spot to loosen the gap and grow it wider.
 
-    The first click selects the physically connected blob of the clicked
-    point's own tree that the click sits in — so in a closed canopy it
-    isolates one continuous lump instead of bleeding into everything it
-    touches.  Each further click on roughly the same spot, within a couple of
-    seconds, keeps the same seed and steps up a level: the whole of that tree
-    (connected or not), then the tree plus one more ring of the trees it
-    touches per extra click.  Move away or pause and the next click starts a
-    fresh level-0 blob.  Shift adds to the current selection.
+    A click selects the physically connected blob of the clicked point's own
+    tree that the click sits in — so in a closed canopy it isolates one
+    continuous lump instead of bleeding into everything it touches.  How big
+    a hole counts as "not connected" is the gap setting.  Each further click
+    on roughly the same spot, within a couple of seconds, keeps the same seed
+    and calls ``on_repeat`` — which the panel wires to "one step looser", the
+    same move as the gap slider or the ] key, so the patch grows one notch
+    per click and the slider follows.  Move away or pause and the next click
+    starts afresh.  Shift adds to the current selection.
 
-    ``grow`` is ``(seed_index, level) -> np.ndarray`` (supplied by the
-    controller, which owns the labels and the cached KD-tree).
+    ``grow`` is ``(seed_index) -> np.ndarray`` (supplied by the controller,
+    which owns the labels, the gap and the cached KD-tree).
     """
 
     #: a click within this many pixels of the last one, and within
@@ -276,11 +277,14 @@ class ClusterTool:
         self.view = view
         self.grow = grow
         self.on_select = on_select
+        #: fn() called by a repeat click on the same spot; set by the panel.
+        #: Nothing happens on a repeat click while it's unset.
+        self.on_repeat = None
         self.move_tol = move_tol
         self._armed = False
         self._canvas = view.canvas
         self._press = None
-        self._chain = None  # dict(seed, xy, t, level) while a sequence runs
+        self._chain = None  # dict(seed, xy, t, base) while a sequence runs
 
     @property
     def armed(self) -> bool:
@@ -296,7 +300,7 @@ class ClusterTool:
             self._connect(True)
             self.view.status = (
                 "Cluster - click a point to select its patch, click again "
-                "to grow it (Shift adds)"
+                "to loosen it (Shift adds)"
             )
         else:
             self._connect(False)
@@ -353,23 +357,59 @@ class ClusterTool:
             <= self.CHAIN_PIXELS ** 2
         )
         if cont:
-            seed, level = ch["seed"], ch["level"] + 1
-        else:
-            seed = self.view.pick_point(xy)
-            if seed is None:
-                # Clicked empty space — clear the selection (Shift-click on
-                # nothing just does nothing).
-                self._chain = None
-                if not additive:
-                    self.on_select(np.empty(0, dtype=np.int64), additive=False)
-                    self.view.status = "Selection cleared"
-                return
-            level = 0
-        indices = self.grow(seed, level)
+            # Same spot again: one step looser, exactly as the slider or ]
+            # would do it -- on_repeat moves the gap, and the gap change
+            # re-runs this chain through reapply(). The chain keeps its seed
+            # and the selection it was added to; only the clock and anchor
+            # move, so a run of clicks keeps chaining.
+            ch["t"], ch["xy"] = now, (float(xy[0]), float(xy[1]))
+            if self.on_repeat is not None:
+                self.on_repeat()
+            return
+        seed = self.view.pick_point(xy)
+        if seed is None:
+            # Clicked empty space — clear the selection (Shift-click on
+            # nothing just does nothing).
+            self._chain = None
+            if not additive:
+                self.on_select(np.empty(0, dtype=np.int64), additive=False)
+                self.view.status = "Selection cleared"
+            return
+        # What the patch is added to: kept on the chain so reapply() can
+        # rebuild the selection from scratch -- a patch that has to be able to
+        # shrink can't be layered on a selection that already contains it.
+        base = set(self.view.selected) if additive else set()
+        indices = self.grow(seed)
         self._chain = {
             "seed": seed,
             "xy": (float(xy[0]), float(xy[1])),
             "t": now,
-            "level": level,
+            "base": base,
         }
-        self.on_select(indices, additive=additive, level=level)
+        self.on_select(indices, additive=additive)
+
+    def end_chain(self) -> None:
+        """Forget the running click sequence: the next click starts afresh,
+        and there's no last click for :meth:`reapply` to re-run."""
+        self._chain = None
+
+    def reapply(self) -> bool:
+        """Re-run the last click with whatever ``grow`` now returns — called
+        when the gap it bridges changes, so the patch on screen tracks the
+        setting instead of waiting for another click.
+
+        Rebuilds from the selection the click was added to, not the current
+        one, so a tighter gap really does shrink the patch. Returns False
+        (and leaves the selection alone) when there's no click to re-run.
+        """
+        ch = self._chain
+        if not self._armed or ch is None:
+            return False
+        indices = self.grow(ch["seed"])
+        if ch["base"]:
+            indices = np.union1d(
+                np.fromiter(ch["base"], dtype=np.int64, count=len(ch["base"])),
+                indices,
+            )
+        self.on_select(indices, additive=False)
+        return True

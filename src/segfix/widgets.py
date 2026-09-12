@@ -30,9 +30,11 @@ from qtpy.QtWidgets import (
     QMessageBox,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QSlider,
     QTableWidget,
     QTableWidgetItem,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -48,6 +50,18 @@ from .viewer import (
     refresh_view,
     visibility_mask,
 )
+
+
+#: Settings for the cluster tool's gap: how many point spacings of empty space
+#: one click will bridge. Discrete steps rather than a free value because the
+#: useful range is multiplicative -- 1x to 2x is as big a change in what gets
+#: grabbed as 8x to 16x.
+CLUSTER_GAP_FACTORS = (1.0, 1.5, 2.0, 3.0, 4.0, 6.0, 8.0, 12.0, 16.0)
+#: Start as tight as it goes: a first click is a small seed, and each repeat
+#: click on the same spot loosens it a step (see ClusterTool). Switching the
+#: Cluster tool off, or the selection being cleared, comes back here -- see
+#: SegFixWidget.reset_cluster_gap.
+DEFAULT_CLUSTER_GAP_FACTOR = 1.0
 
 
 class SegFixController:
@@ -77,11 +91,15 @@ class SegFixController:
         # selection — see _on_lasso. Also a mode choice, not per-cloud state.
         self.on_lasso_section = None
         # Cluster-tool caches, all keyed to the current point array and
-        # dropped in set_cloud: the gap distance, and per-tree connected-
-        # component labellings (built once per tree the first time it's
-        # clicked).
-        self._cluster_gap: float | None = None
+        # dropped in set_cloud: the measured point spacing, and per-tree
+        # connected-component labellings (built once per tree the first time
+        # it's clicked, and again whenever the gap changes).
+        self._cluster_spacing: float | None = None
         self._cluster_cc: dict[int, tuple] = {}
+        # How many point spacings of empty space a cluster click bridges; the
+        # panel's "Cluster gap" popover sets it. A mode choice like
+        # lasso_filter, so it survives set_cloud.
+        self.cluster_gap_factor = DEFAULT_CLUSTER_GAP_FACTOR
         self.lasso = LassoTool(view, self._on_lasso)
         self.cluster = ClusterTool(view, self._grow_cluster, self._on_cluster)
 
@@ -91,7 +109,7 @@ class SegFixController:
         was_lasso, was_cluster = self.lasso.armed, self.cluster.armed
         self.lasso.set_armed(False)
         self.cluster.set_armed(False)
-        self._cluster_gap, self._cluster_cc = None, {}  # for the old points
+        self._cluster_spacing, self._cluster_cc = None, {}  # for the old points
         self.cloud = cloud
         self.save_path = cloud.source_path
         self.faded_ids = set()  # a fresh cloud starts with nothing faded
@@ -113,6 +131,38 @@ class SegFixController:
         self.view.selected = current
         self.view.status = f"Lasso selected {len(current)} points"
 
+    @property
+    def cluster_gap(self) -> float:
+        """The cluster tool's bridging distance, in metres: the loaded
+        points' typical spacing times :attr:`cluster_gap_factor`. Measuring
+        the spacing builds a KD-tree over what's loaded, so it's done once
+        per cloud, on first need."""
+        from . import analysis
+
+        if self._cluster_spacing is None:
+            self._cluster_spacing = analysis.point_spacing(self.view.coords)
+        return self._cluster_spacing * self.cluster_gap_factor
+
+    def set_cluster_gap_factor(self, factor: float) -> bool:
+        """Change how much empty space a cluster click bridges, and re-run
+        the last click at the new setting so its patch updates on screen.
+        Returns whether there was a click to re-run."""
+        factor = float(factor)
+        if factor == self.cluster_gap_factor:
+            return False
+        self.cluster_gap_factor = factor
+        self._cluster_cc = {}  # every cached labelling was built at the old gap
+        return self.cluster.reapply()
+
+    def reset_cluster_gap(self) -> None:
+        """Back to the default gap, leaving the selection exactly as it is.
+
+        The click sequence ends *first*: otherwise changing the gap would
+        re-run the last click at the default and shrink the selection --
+        right as the user switches to Move to press A on it."""
+        self.cluster.end_chain()
+        self.set_cluster_gap_factor(DEFAULT_CLUSTER_GAP_FACTOR)
+
     def _cluster_component(self, seed_label: int, gap: float):
         """(sorted point indices, component-id per index) for one tree's
         ``gap``-connected blobs — computed once per tree, then cached."""
@@ -129,57 +179,35 @@ class SegFixController:
             self._cluster_cc[seed_label] = cached
         return cached
 
-    def _grow_cluster(self, seed: int, level: int = 0) -> np.ndarray:
-        """The cluster tool's payload for click number ``level`` of a
-        sequence (see :class:`~segfix.lasso.ClusterTool`):
+    def _grow_cluster(self, seed: int) -> np.ndarray:
+        """The cluster tool's payload (see :class:`~segfix.lasso.ClusterTool`):
+        the blob of the seed's own tree that is connected to it across gaps
+        no wider than :attr:`cluster_gap`, intersected with what's shown.
 
-        - 0: the connected blob of the seed's own tree around the click.
-        - 1: the whole of the seed's tree (connected or not).
-        - 2+: the tree plus ``level - 1`` rings of trees it touches.
-
-        Everything is intersected with what's currently shown.
+        Growing it is the gap's job — the slider, [ and ], or clicking the
+        same spot again all loosen or tighten this one setting.
         """
-        from . import analysis
-
         labels = self.cloud.labels
-        seed_lbl = int(labels[seed])
-        if self._cluster_gap is None:
-            self._cluster_gap = analysis.point_spacing(self.view.coords) * 4.0
-
-        if level == 0:
-            same, comp = self._cluster_component(seed_lbl, self._cluster_gap)
-            if same.size <= 1:
-                idx = same
-            else:
-                local = int(np.searchsorted(same, seed))
-                idx = same[comp == comp[local]]
-        elif level == 1:
-            idx = np.flatnonzero(labels == seed_lbl)
+        same, comp = self._cluster_component(int(labels[seed]), self.cluster_gap)
+        if same.size <= 1:
+            idx = same
         else:
-            grown = {seed_lbl}
-            for _ in range(level - 1):
-                ring = set()
-                for t in grown:
-                    ring |= analysis.neighbours_by_points(
-                        self.cloud, t, max(self._cluster_gap, 0.15)
-                    )
-                if ring <= grown:
-                    break
-                grown |= ring
-            idx = np.flatnonzero(np.isin(labels, list(grown)))
+            local = int(np.searchsorted(same, seed))
+            idx = same[comp == comp[local]]
 
         shown = np.asarray(self.view.shown, dtype=bool)
         if shown.shape[0] == len(labels):
             idx = idx[shown[idx]]
         return idx
 
-    def _on_cluster(self, indices: np.ndarray, additive: bool,
-                    level: int = 0) -> None:
+    def _on_cluster(self, indices: np.ndarray, additive: bool) -> None:
         current = set(self.view.selected) if additive else set()
         current.update(int(i) for i in indices)
         self.view.selected = current
-        tail = " - click again to grow" if level == 0 else f" (level {level})"
-        self.view.status = f"Cluster selected {len(current)} points{tail}"
+        self.view.status = (
+            f"Cluster selected {len(current)} points at "
+            f"{self.cluster_gap_factor:g}× spacing - click again to loosen"
+        )
 
     def selected_indices(self) -> np.ndarray:
         return np.fromiter(self.view.selected, dtype=np.int64)
@@ -209,6 +237,10 @@ class SegFixWidget(QWidget):
         self.current: int | None = None  # the tree under review
         self.done_ids: set[int] = set()  # trees marked done in the table
         self.hidden_ids: set[int] = set()  # trees manually hidden via 👁
+        # Whether the last _update_selection saw any points selected, so it
+        # can spot the selection being cleared. Starts False: nothing to
+        # reset before the gap slider even exists.
+        self._had_selection = False
         self._table_updating = False
         # Optional fn()->None: set by scene mode so its own tree table (which
         # mirrors done-state from the same sidecar file) refreshes the moment
@@ -339,10 +371,36 @@ class SegFixWidget(QWidget):
             "Click a point to select the connected patch of the SAME tree's "
             "points around it (a spatial region grow) - e.g. to grab an "
             "over-segmented fragment or a wrongly-attached limb. Shift-click "
-            "adds to the selection."
+            "adds to the selection. Click the same spot again to loosen the "
+            "gap a step - the same as ] or the gap slider."
         )
         self.cluster_btn.toggled.connect(self.on_toggle_cluster)
-        interaction.addWidget(self.cluster_btn)
+        # The gap setting hangs off a narrow arrow glued to the Cluster
+        # button, opening a popover: a slider inline would roughly double
+        # the Interaction box's width for a control touched now and then.
+        cluster_pair = QHBoxLayout()
+        cluster_pair.setSpacing(0)
+        cluster_pair.addWidget(self.cluster_btn)
+        self.cluster_gap_btn = QToolButton()
+        self.cluster_gap_btn.setArrowType(Qt.ArrowType.DownArrow)
+        self.cluster_gap_btn.setFixedWidth(16)
+        self.cluster_gap_btn.setSizePolicy(
+            QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Expanding
+        )
+        self.cluster_gap_btn.setToolTip(
+            "Cluster gap - how much empty space one click bridges ([ and ])"
+        )
+        cluster_pair.addWidget(self.cluster_gap_btn)
+        interaction.addLayout(cluster_pair)
+        self._build_cluster_gap_popover()
+        # A repeat click on the same spot is one notch looser -- routed
+        # through the slider so the two can never disagree.
+        self.c.cluster.on_repeat = lambda: self.step_cluster_gap(1)
+        self.cluster_gap_btn.clicked.connect(
+            lambda: self._toggle_popover(
+                self._cluster_gap_popover, self.cluster_gap_btn
+            )
+        )
         interaction.addStretch(1)
         # Each mode button lights up in its own colour while active.
         for btn, bg, fg in (
@@ -655,6 +713,96 @@ class SegFixWidget(QWidget):
         popover.move(anchor.mapToGlobal(anchor.rect().bottomLeft()))
         popover.show()
 
+    def _build_cluster_gap_popover(self) -> None:
+        """The Cluster gap popover: a Tight-to-Loose slider over
+        :data:`CLUSTER_GAP_FACTORS`, and a line saying what the setting
+        means for the cloud that's loaded."""
+        pop = QWidget(self, Qt.Popup)
+        self._cluster_gap_popover = pop
+        lay = QVBoxLayout(pop)
+        title = QLabel("Cluster gap")
+        title.setStyleSheet("font-weight: bold;")
+        lay.addWidget(title)
+        row = QHBoxLayout()
+        row.addWidget(QLabel("Tight"))
+        self.cluster_gap_slider = QSlider(Qt.Horizontal)
+        self.cluster_gap_slider.setRange(0, len(CLUSTER_GAP_FACTORS) - 1)
+        self.cluster_gap_slider.setPageStep(1)
+        self.cluster_gap_slider.setTickPosition(QSlider.TickPosition.TicksBelow)
+        self.cluster_gap_slider.setMinimumWidth(180)
+        self.cluster_gap_slider.setValue(
+            CLUSTER_GAP_FACTORS.index(DEFAULT_CLUSTER_GAP_FACTOR)
+        )
+        self.cluster_gap_slider.valueChanged.connect(self._on_cluster_gap_changed)
+        row.addWidget(self.cluster_gap_slider)
+        row.addWidget(QLabel("Loose"))
+        lay.addLayout(row)
+        self.cluster_gap_label = QLabel()
+        lay.addWidget(self.cluster_gap_label)
+        hint = QLabel(
+            "Looser bridges wider holes, so one click grabs more of a tree.\n"
+            "Click the same spot again, or press ], to loosen a step;\n"
+            "[ tightens. The last cluster click updates live.\n"
+            f"Back to {DEFAULT_CLUSTER_GAP_FACTOR:g}× when Cluster is switched off\n"
+            "or the selection is cleared."
+        )
+        hint.setStyleSheet("color: gray;")
+        lay.addWidget(hint)
+        self._update_cluster_gap_label()
+
+    def _update_cluster_gap_label(self) -> None:
+        factor = self.c.cluster_gap_factor
+        text = f"{factor:g}× the point spacing"
+        # Only quote metres once there's a cloud to measure: the spacing of
+        # an empty view is a placeholder, not a number worth showing.
+        if len(self.c.view.coords) >= 2:
+            text += f"  (≈ {self.c.cluster_gap * 100:.1f} cm here)"
+        self.cluster_gap_label.setText(text)
+        self.cluster_btn.setToolTip(
+            self.cluster_btn.toolTip().split("\n\nGap:")[0]
+            + f"\n\nGap: {factor:g}× point spacing"
+        )
+
+    def _on_cluster_gap_changed(self, index: int) -> None:
+        reapplied = self.c.set_cluster_gap_factor(CLUSTER_GAP_FACTORS[index])
+        self._update_cluster_gap_label()
+        if not reapplied:
+            self.c.view.status = (
+                f"Cluster gap {self.c.cluster_gap_factor:g}× point spacing"
+            )
+
+    def reset_cluster_gap(self) -> None:
+        """Back to the default gap when the Cluster tool is switched off —
+        the loosening its clicks built up belongs to that use of the tool.
+
+        The slider moves with its signals blocked: its handler would post a
+        "Cluster gap …" status over the tool's own "Cluster off", and there's
+        nothing for it to re-run anyway (see SegFixController.reset_cluster_gap).
+        """
+        self.c.reset_cluster_gap()
+        s = self.cluster_gap_slider
+        s.blockSignals(True)
+        s.setValue(CLUSTER_GAP_FACTORS.index(DEFAULT_CLUSTER_GAP_FACTOR))
+        s.blockSignals(False)
+        self._update_cluster_gap_label()
+
+    def step_cluster_gap(self, step: int) -> None:
+        """Move the gap one notch tighter (-1) or looser (+1): the [ and ]
+        keys, and a repeat cluster click, so it can be tuned without leaving
+        the canvas."""
+        s = self.cluster_gap_slider
+        target = s.value() + step
+        if not s.minimum() <= target <= s.maximum():
+            # Already at the end: say so, or a click that does nothing reads
+            # as the tool having stopped working.
+            end = "loosest" if step > 0 else "tightest"
+            self.c.view.status = (
+                f"Cluster gap already at its {end} "
+                f"({self.c.cluster_gap_factor:g}× spacing)"
+            )
+            return
+        s.setValue(target)
+
     def _subheading(self, text: str) -> QLabel:
         """A small bold label dividing a group box into sub-sections,
         lighter-weight than nesting another QGroupBox."""
@@ -729,6 +877,7 @@ class SegFixWidget(QWidget):
             self.c.on_lasso_section = None
             self._uncheck_other_modes(self.cluster_btn)
         else:
+            self.reset_cluster_gap()
             self.move_btn.setChecked(True)
 
     def on_toggle_lasso_section(self, checked: bool) -> None:
@@ -771,9 +920,15 @@ class SegFixWidget(QWidget):
         ):
             if btn is active_btn:
                 continue
+            was_checked = btn.isChecked()
             btn.blockSignals(True)
             btn.setChecked(False)
             btn.blockSignals(False)
+            if btn is self.cluster_btn and was_checked:
+                # Unchecked with signals blocked, so on_toggle_cluster never
+                # hears about it: going straight from Cluster to another mode
+                # has to reset the gap here, or it would only reset via K/Esc.
+                self.reset_cluster_gap()
 
     def on_move_mode(self) -> None:
         """Revert to camera/movement controls (Escape)."""
@@ -1333,7 +1488,15 @@ class SegFixWidget(QWidget):
     # -- selection info -----------------------------------------------
     def _update_selection(self) -> None:
         idx = self.c.selected_indices()
+        had_selection, self._had_selection = self._had_selection, idx.size > 0
         if idx.size == 0:
+            if had_selection:
+                # The selection just went away (A/N/U/X, an empty-space
+                # click, another tree, a reload): whatever the cluster
+                # clicks loosened the gap to was for that selection.
+                # Watching for the *transition* keeps a gap set on the
+                # slider before the first click, with nothing selected yet.
+                self.reset_cluster_gap()
             self.sel_info.setText("No selection")
             return
         trees = self._selected_trees(idx)
@@ -1520,6 +1683,8 @@ def bind_shortcuts(window, panel: SegFixWidget) -> None:
         "L": panel.lasso_btn.toggle,
         "Ctrl+L": panel.tree_lasso_btn.toggle,
         "K": panel.cluster_btn.toggle,
+        "[": lambda: panel.step_cluster_gap(-1),
+        "]": lambda: panel.step_cluster_gap(1),
         "Esc": panel.on_move_mode,
         "Space": panel.on_done_next,
         "Left": lambda: panel._step(-1),

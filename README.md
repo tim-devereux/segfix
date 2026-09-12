@@ -175,6 +175,8 @@ to the right edge of the 3D view, next to the points they act on.
    | `←` / `→` | Previous / next tree (without marking done) |
    | `L` | Lasso select |
    | `Ctrl+L` | Lasso, but only points already in the current tree, grabs a clean patch out of an overlapping crown |
+   | `K` | Cluster select: click a point to take the connected patch of its tree; click the same spot again to loosen the gap and grow it |
+   | `[` / `]` | Tighten / loosen the cluster gap one step |
    | `Esc` | Back to camera / navigation |
    | `A` | Add selection to the current tree (missing branches, unassigned canopy) |
    | `N` | Split selection off as a new tree (it joins the queue unreviewed) |
@@ -188,6 +190,17 @@ to the right edge of the 3D view, next to the points they act on.
    | `Ctrl+Z` / `Ctrl+Shift+Z` | Undo / Redo (also on the **Edit** menu) |
    | `Ctrl+S` | Save Project (also on the **File** menu) |
    | `Ctrl+O` | Open another project |
+
+   **Cluster (`K`)** is the other way to select: click a point and it takes the
+   patch of that point's tree that is physically connected to it. How wide a
+   hole still counts as connected is the *gap*, in multiples of the cloud's
+   point spacing. It starts at 1×, deliberately tight, so a first click is a
+   small seed; click the same spot again to loosen it a step and grow the
+   patch (1× → 1.5× → 2× … up to 16×), or use `[` / `]`, or the **▾** beside
+   the Cluster button for a slider. Changing the gap re-runs your last click,
+   so the patch grows or shrinks on screen as you go. The gap goes back to 1×
+   when you switch Cluster off, or when the selection is cleared (after
+   `A`/`N`/`U`/`X`, a click on empty space, or moving to another tree).
 
    To move stray points *to a neighbour* instead, lasso them and click one of
    the **→ id** buttons in the Current tree panel, one per tree within
@@ -221,7 +234,7 @@ to the right edge of the 3D view, next to the points they act on.
 | `operations.py` | pure, UI-agnostic label edits (reassign/split/unassign/noise) |
 | `analysis.py` | which trees touch which, by sampled point distance (KD-tree) |
 | `density.py` | point-spacing measurement, voxel decimation, and the save-time interpolation back to full resolution |
-| `lasso.py` | 3D screen-space lasso: camera projection + polygon test |
+| `lasso.py` | 3D screen-space lasso (camera projection + polygon test) and the click-to-grow cluster tool |
 | `cloudview.py` | the vispy 3D canvas: camera, points, selection halo, tree box |
 | `viewer.py` | label→colour mapping and visibility masks |
 | `overlays.py` | scale bar + orientation axes painted over the canvas |
