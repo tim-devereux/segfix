@@ -134,11 +134,31 @@ def apply(app, mode: str | None = None) -> None:
     _mode = "light" if (mode or load()) == "light" else "dark"
     app.setStyle("Fusion")  # re-set each time: forces a full re-polish
     app.setPalette(_light_palette() if _mode == "light" else _dark_palette())
+    _repolish_styled_widgets(app)
     for fn in list(_listeners):
         try:
             fn(_mode)
         except Exception:
             pass
+
+
+def _repolish_styled_widgets(app) -> None:
+    """Make widgets with their own stylesheet pick up the new palette.
+
+    The re-polish that ``setStyle`` forces runs *before* ``setPalette``, and a
+    widget with a stylesheet (the top bar's highlighted mode buttons: Lasso,
+    Cluster, Draw ...) resolves every colour its rules don't set from the
+    palette in force at that moment. So those widgets were polished against
+    the *previous* theme and kept its colours -- dark buttons in the light
+    theme, light ones after switching back. Polishing them again now, with
+    the new palette in place, fixes both directions.
+    """
+    for w in app.allWidgets():
+        if w.styleSheet():
+            style = w.style()
+            style.unpolish(w)
+            style.polish(w)
+            w.update()
 
 
 def set_mode(app, mode: str) -> None:
