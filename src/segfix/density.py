@@ -210,6 +210,36 @@ def class_trees(coords: np.ndarray, codes: np.ndarray, candidates: np.ndarray):
     return out
 
 
+def whole_class_moves(codes: np.ndarray, before: np.ndarray,
+                      after: np.ndarray) -> dict[int, int]:
+    """Original label codes whose *every* working point changed to one and
+    the same new label, as ``{code: new_label}``.
+
+    That is an edit of a whole tree -- X or U on the current tree, a complete
+    merge -- and it has to reach every one of that tree's full-resolution
+    points. :func:`expand_labels` can't promise that on its own: a point in
+    a voxel where a *different* class's point was the one kept (a bush's
+    rim, sharing voxels with the ground) has no working point of its own
+    tree nearby to be matched to, and would keep its old label.
+
+    Only real trees qualify (original label above zero): moving every kept
+    unassigned point is not a statement about unassigned points never seen.
+    ``codes``, ``before`` and ``after`` are aligned per working point.
+    """
+    changed = before != after
+    out: dict[int, int] = {}
+    if not changed.any():
+        return out
+    for code in np.unique(codes[changed]):
+        members = codes == code
+        if not changed[members].all() or before[members].min() <= 0:
+            continue
+        new = np.unique(after[members])
+        if new.size == 1:
+            out[int(code)] = int(new[0])
+    return out
+
+
 def expand_labels(
     trees: dict,
     query_coords: np.ndarray,

@@ -533,11 +533,18 @@ class _BaseCatalog:
         touched keep the file's original labels exactly, down to the last
         point, and a save stays a diff rather than a rewrite.
 
-        The scan is chunked over the memory-mapped records and skipped
-        entirely outside the bounding box of the edits, so its cost tracks
-        the size of what was edited, not the size of the file.
+        The scan is chunked over the memory-mapped records and the matching
+        skipped entirely outside the bounding box of the edits, so its cost
+        tracks the size of what was edited, not the size of the file.
+
+        One exception to nearest-point matching: a tree moved *whole* (X or
+        U on the current tree, a complete merge -- see
+        :func:`~segfix.density.whole_class_moves`) takes every one of its
+        points with it, wherever they are in the file, including any the
+        working set never showed because another class's point was kept for
+        their voxel.
         """
-        from .density import class_trees, expand_labels, in_box
+        from .density import class_trees, expand_labels, in_box, whole_class_moves
 
         # Which full-resolution points are worth looking at: every occupied
         # voxel keeps a point, so no point sits further than one voxel
@@ -559,6 +566,10 @@ class _BaseCatalog:
         )
         codes = self._raw_label_codes(self._mm[self._sub_idx])
         trees = class_trees(self.coords, codes, cand)
+        whole = whole_class_moves(codes, self._original_labels, self.labels)
+        whole_codes = np.array(sorted(whole), dtype=np.int64)
+        whole_labels = np.array([whole[k] for k in whole_codes],
+                                dtype=self.labels.dtype)
 
         rows: list[np.ndarray] = []
         values: list[np.ndarray] = []
@@ -570,14 +581,25 @@ class _BaseCatalog:
                     _SAVE_WRITE_AT * start / max(self.count, 1),
                 )
             block = self._mm[start:stop]
+            block_codes = self._raw_label_codes(block)
+
+            # Whole-tree moves: by label alone, anywhere in the chunk -- a
+            # stranded point can sit outside the box the edits span.
+            is_whole = (np.isin(block_codes, whole_codes) if whole_codes.size
+                        else np.zeros(block_codes.size, dtype=bool))
+            if is_whole.any():
+                w = np.flatnonzero(is_whole)
+                rows.append(start + w)
+                values.append(whole_labels[np.searchsorted(whole_codes, block_codes[w])])
+
             coords = self._decode_coords(block)
-            inside = np.flatnonzero(in_box(coords, lo, hi))
+            inside = np.flatnonzero(in_box(coords, lo, hi) & ~is_whole)
             if not inside.size:
                 continue
             local, source = expand_labels(
                 trees,
                 coords[inside],
-                self._raw_label_codes(block[inside]),
+                block_codes[inside],
                 changed,
                 self.labels.size,
                 max_distance=reach,

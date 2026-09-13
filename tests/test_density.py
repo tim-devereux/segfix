@@ -510,3 +510,73 @@ def test_progress_is_optional_everywhere(tmp_path):
     ops.reassign(cloud, np.flatnonzero(cloud.labels == 2), 1)
     cat.apply(cloud, gidx)
     assert "Saved" in cat.save()
+
+
+# -- whole-tree edits reach points the working set never showed ---------------
+def _stranded_plot(tmp_path):
+    """Tree 1 = a dense block, plus four stray points of it sitting in voxel
+    corners among ground points placed at voxel *centres* -- so every one of
+    those voxels keeps its ground point, and the strays never appear in the
+    decimated working set at all.
+
+    Coordinates are chosen so the voxel grid's origin (the cloud's minimum
+    corner) lands on the first stray: (1, 1, 1) mm.
+    """
+    c = 0.011 + 0.02 * np.arange(20)          # voxel centres, relative to 1 mm
+    gx, gy = np.meshgrid(c, c, indexing="ij")
+    ground = np.column_stack([gx.ravel(), gy.ravel(), np.full(gx.size, 0.011)])
+    strays = np.array([[0.001, 0.001, 0.001], [0.101, 0.101, 0.001],
+                       [0.201, 0.141, 0.001], [0.301, 0.261, 0.001]])
+    blob = _grid(0.004, 20, 20, 20, origin=(0.6, 0.0, 0.011))  # dense: trips the check
+    coords = np.vstack([ground, strays, blob])
+    tid = np.concatenate([np.zeros(len(ground), int), np.ones(len(strays) + len(blob), int)])
+    path = tmp_path / "stranded.las"
+    _write_arbor_las(path, coords, tid)
+    strays_rows = np.arange(len(ground), len(ground) + len(strays))
+    return str(path), strays_rows
+
+
+def test_whole_tree_edit_reaches_points_hidden_in_other_voxels(tmp_path):
+    """The bush-on-the-ground case: unassigning a whole tree in a decimated
+    session must unassign every one of its points, including ones whose
+    voxels kept a ground point instead -- there is no working point of their
+    own tree anywhere near them to be matched to."""
+    path, strays = _stranded_plot(tmp_path)
+    cat = open_catalog(path, density_prompt=lambda *a: 0.02)
+    assert cat.is_decimated
+    # The strays really are invisible to the session.
+    kept_tree = cat.coords[cat.labels == 1]
+    assert (kept_tree[:, 0] < 0.5).sum() == 0
+
+    cloud, gidx = cat.load([1], margin=0.0)
+    ops.unassign(cloud, np.flatnonzero(cloud.labels == 1))
+    cat.apply(cloud, gidx)
+    cat.save()
+
+    reopened = open_catalog(path)
+    assert (reopened.labels == 1).sum() == 0
+    assert (reopened.labels[strays] == UNASSIGNED).all()
+
+
+def test_partial_edit_does_not_sweep_up_unseen_points(tmp_path):
+    """Only a tree moved *whole* takes its unseen points along: unassign all
+    but a few of its kept points and the strays keep their label, exactly
+    as nearest-point matching would leave them."""
+    path, strays = _stranded_plot(tmp_path)
+    cat = open_catalog(path, density_prompt=lambda *a: 0.02)
+    cloud, gidx = cat.load([1], margin=0.0)
+    ops.unassign(cloud, np.flatnonzero(cloud.labels == 1)[:-5])
+    cat.apply(cloud, gidx)
+    cat.save()
+
+    reopened = open_catalog(path)
+    assert (reopened.labels[strays] == 1).all()
+
+
+def test_whole_class_moves_needs_every_point_moved_the_same_way():
+    codes = np.array([7, 7, 7, 8, 8, 0, 0])
+    before = np.array([7, 7, 7, 8, 8, 0, 0])
+    after = np.array([-1, -1, -1, 3, 8, 5, 5])   # 7 all noise; 8 half-moved; 0 all to 5
+    assert density.whole_class_moves(codes, before, after) == {7: -1}
+    split = np.array([3, 3, 4, 8, 8, 0, 0])      # 7 moved, but to two labels
+    assert 7 not in density.whole_class_moves(codes, before, split)
