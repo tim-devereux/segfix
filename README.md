@@ -13,8 +13,7 @@ back to a corrected version of the input, retaining all fields.
 
 A 12-minute captioned tour of every tool, fixing every tree in the example
 cloud from `scripts/make_sample.py`, including large coordinates and dense
-clouds. Click to watch
-([subtitles](https://github.com/tim-devereux/segfix/releases/download/v1.0.0/segfix_walkthrough.srt)):
+clouds. Click to watch:
 
 [![Watch the segfix walkthrough](https://raw.githubusercontent.com/tim-devereux/segfix/main/docs/walkthrough.jpg)](https://github.com/tim-devereux/segfix/releases/download/v1.0.0/segfix_walkthrough.mp4)
 
