@@ -1,10 +1,23 @@
 """Generate a synthetic forest plot with deliberate segmentation errors.
 
-Creates a handful of simple cone-ish "trees" plus two classic mistakes to
-practise on: an over-segmented tree (one tree split into two IDs) and an
-under-segmented pair (two trees sharing one ID) — plus the two non-tree
-labels real scans always carry: a scatter of unassigned ground/understory
-points, and a handful of noise points floating with nothing near them.
+A dozen cone-ish "trees" of clearly different sizes -- from a 5.5 m sapling
+to a 14 m giant -- standing alone and in touching groups, with the five
+mistakes a segmentation pipeline really makes, one of each to practise on:
+
+* **wrong side of a boundary** -- where trees 1 and 2 touch, the part of
+  tree 2's crown facing tree 1 was given tree 1's ID;
+* **over-segmented** -- one tree split into two IDs (7 = trunk and lower
+  crown, 8 = the top), next to a small neighbour (9);
+* **under-segmented** -- two trees sharing one ID (10);
+* **leaked into the ground** -- a tree (11) whose ID also swallowed a patch
+  of ground beside it, for Unassign (U);
+* **false positive** -- a bush detected as a tree (12), for Noise (X);
+
+plus the two non-tree labels real scans always carry: unassigned ground,
+and a handful of noise points floating with nothing near them. Trees 1-3
+stand close enough that loading any one brings the other two, which is
+where lasso and "lasso tree" (current tree only) visibly differ -- and
+where the boundary error above gets fixed.
 
 Usage:  python scripts/make_sample.py sample.ply
         python scripts/make_sample.py --format las sample.las
@@ -42,9 +55,37 @@ from segfix import PointCloud
 from segfix import io
 from segfix.model import NOISE, UNASSIGNED
 
+# -- the plot -------------------------------------------------------------------
+# (tree ID, trunk position (x, y), height m, crown radius m). IDs are fixed so
+# a walkthrough can refer to them.
+_CLEAN = [
+    # A touching group of three very different sizes.
+    (1, (0.0, 0.0), 13.0, 3.0),
+    (2, (4.6, 0.8), 7.0, 1.8),
+    (3, (1.8, 4.6), 9.5, 2.2),
+    # Stand-alone trees, large to small.
+    (4, (18.0, 13.0), 14.0, 2.8),
+    (5, (26.0, 12.0), 5.5, 1.3),
+    (6, (32.0, 8.5), 9.0, 2.0),
+    # The small neighbour of the over-segmented tree below.
+    (9, (17.6, 3.6), 6.0, 1.5),
+]
+# Wrong side of a boundary: (tree that took the points, tree they belong to).
+_BOUNDARY = (1, 2)
+_OVER_SEGMENTED = ((7, 8), (14.0, 2.0), 11.0, 2.5, 0.55)  # ids, xy, h, r, split
+_UNDER_SEGMENTED = (10, [((26.5, 1.0), 10.0, 2.0), ((29.3, 1.6), 8.0, 1.7)])
+_LEAKY = (11, (6.0, 14.0), 8.5, 2.2)
+# The ground patch tree 11 swallowed: beside its trunk, clear of it.
+_LEAK_PATCH = ((6.8, 8.6), (13.0, 15.4))  # (x range, y range)
+_BUSH = (12, (9.2, 12.4), 1.1, 0.9)       # id, xy, height, radius
+_BOUNDS = ((-4.0, 35.0), (-4.0, 18.0))
 
-def tree(center, height=8.0, radius=2.0, n=2000, rng=None):
+
+# -- volumetric (default) shapes ---------------------------------------------------
+def tree(center, height=8.0, radius=2.0, n=None, rng=None):
     rng = rng or np.random.default_rng()
+    if n is None:  # scale with crown volume, so big trees look it
+        n = int(np.clip(2000 * height * radius * radius / 32.0, 600, 7000))
     z = rng.random(n) ** 0.5 * height          # denser near the base
     r = (1 - z / height) * radius * rng.random(n) ** 0.5
     theta = rng.random(n) * 2 * np.pi
@@ -53,7 +94,21 @@ def tree(center, height=8.0, radius=2.0, n=2000, rng=None):
     return np.column_stack([x, y, center[2] + z]).astype(np.float32)
 
 
-def ground(bounds, n=3000, z=0.0, jitter=0.15, rng=None):
+def bush(center, height=1.1, radius=0.9, n=500, rng=None):
+    """A low rounded shrub -- exactly the kind of blob a segmentation
+    pipeline happily calls a tree."""
+    rng = rng or np.random.default_rng()
+    d = rng.normal(size=(n, 3))
+    d /= np.linalg.norm(d, axis=1, keepdims=True)
+    s = rng.random(n) ** (1 / 3)
+    return np.column_stack([
+        center[0] + d[:, 0] * radius * s,
+        center[1] + d[:, 1] * radius * s,
+        center[2] + np.abs(d[:, 2]) * height * s,
+    ]).astype(np.float32)
+
+
+def ground(bounds, n=5000, z=0.0, jitter=0.15, rng=None):
     """A scatter of unassigned points across the plot's footprint, at
     roughly ground level — the terrain/understory real scans are full of,
     which the review workflow lassoes and assigns into a tree with A."""
@@ -76,6 +131,7 @@ def floaters(bounds, n=15, z_range=(3.0, 12.0), rng=None):
     return np.column_stack([x, y, z]).astype(np.float32)
 
 
+# -- scan-like (--spacing) shapes -------------------------------------------------
 def _jittered_grid(u_size, v_size, spacing, rng):
     """``(u, v)`` samples covering a ``u_size`` x ``v_size`` patch at roughly
     ``spacing`` pitch.
@@ -145,6 +201,28 @@ def dense_tree(center, height=8.0, radius=2.0, spacing=0.01, rng=None):
     return np.vstack([trunk, crown]).astype(np.float32)
 
 
+def dense_bush(center, height=1.1, radius=0.9, spacing=0.01, rng=None):
+    """A shrub's outer surface at ``spacing``: a dome, as a scanner sees it.
+
+    A Fibonacci lattice on the hemisphere rather than random points, for the
+    same reason as :func:`_jittered_grid` -- even spacing, so the measured
+    pitch matches the requested one.
+    """
+    rng = rng or np.random.default_rng()
+    area = 2 * np.pi * radius * max(radius, height)  # roughly, for a dome
+    n = max(200, int(area / spacing ** 2))
+    i = np.arange(n) + 0.5
+    zu = 1.0 - i / n                       # 1 at the crown, 0 at the rim
+    ru = np.sqrt(1.0 - zu * zu)
+    theta = i * np.pi * (3.0 - np.sqrt(5.0))  # golden angle
+    rough = 1.0 + rng.normal(0, 0.03, n)      # leafy, not a smooth dome
+    return np.column_stack([
+        center[0] + ru * radius * rough * np.cos(theta),
+        center[1] + ru * radius * rough * np.sin(theta),
+        center[2] + zu * height * rough,
+    ]).astype(np.float32)
+
+
 def dense_ground(centers, spacing=0.01, reach=3.0, rng=None):
     """Ground under the trees, at ``spacing``: one grid over the whole plot,
     keeping only what falls within ``reach`` of a trunk.
@@ -170,6 +248,23 @@ def dense_ground(centers, spacing=0.01, reach=3.0, rng=None):
     return np.column_stack([x, y, z]).astype(np.float32)
 
 
+def facing_band(pts, xy, height, toward, half_angle=50.0, band=(0.5, 0.8)):
+    """A tree's crown points on the side facing ``toward``, in a height band
+    -- where a touching neighbour's segmentation typically bleeds in.
+
+    The band sits high enough in the crown that it stays clear of the
+    neighbour's own points: a real mislabelling to fix, not a tangle.
+    """
+    v = pts[:, :2] - np.asarray(xy, dtype=np.float64)
+    d = np.asarray(toward, dtype=np.float64) - np.asarray(xy, dtype=np.float64)
+    d /= np.linalg.norm(d)
+    r = np.linalg.norm(v, axis=1)
+    facing = (v @ d) > np.cos(np.radians(half_angle)) * np.maximum(r, 1e-9)
+    z = pts[:, 2]
+    in_band = (z > band[0] * height) & (z < band[1] * height)
+    return facing & in_band & (r > 0.3)  # crown only, not the stem
+
+
 def _write_las(coords: np.ndarray, labels: np.ndarray, out: str) -> None:
     """Write an arbor-shaped LAS/LAZ: XYZ + an int ``treeID`` Extra-Bytes
     column (``0`` = unassigned, as arbor writes it)."""
@@ -189,18 +284,6 @@ def _write_las(coords: np.ndarray, labels: np.ndarray, out: str) -> None:
     las.write(out)
 
 
-# Where the trees stand, and how wide, shared by both modes: three clean
-# trees, one that is over-segmented, and a close pair sharing an ID.
-_CENTERS = [
-    ((0, 0, 0), 2.0),
-    ((10, 0, 0), 2.0),
-    ((0, 10, 0), 2.0),
-    ((10, 10, 0), 2.0),
-    ((20, 5, 0), 1.5),
-    ((22.5, 5, 0), 1.5),
-]
-
-
 def main(out, spacing=None, origin=None):
     rng = np.random.default_rng(42)
     parts, labels = [], []
@@ -209,33 +292,62 @@ def main(out, spacing=None, origin=None):
         parts.append(pts)
         labels.append(np.full(len(pts), lab, dtype=np.int32))
 
-    def make(center, radius):
+    def make(xy, height, radius):
+        center = (xy[0], xy[1], 0.0)
         if spacing is None:
-            return tree(center, radius=radius, rng=rng)
-        return dense_tree(center, radius=radius, spacing=spacing, rng=rng)
+            return tree(center, height=height, radius=radius, rng=rng)
+        return dense_tree(center, height=height, radius=radius, spacing=spacing, rng=rng)
 
-    # Three clean trees: IDs 1, 2, 3
-    for lab, (center, radius) in zip((1, 2, 3), _CENTERS[:3]):
-        add(make(center, radius), lab)
+    trunks = []  # every stem, for where the ground goes
 
-    # Over-segmented: one physical tree at (10,10) split into IDs 4 and 5
-    t = make(*_CENTERS[3])
-    add(t[t[:, 2] < 4], 4)
-    add(t[t[:, 2] >= 4], 5)
+    taker, owner = _BOUNDARY
+    taker_xy = next(xy for tid, xy, _h, _r in _CLEAN if tid == taker)
+    for tid, xy, h, r in _CLEAN:
+        pts = make(xy, h, r)
+        if tid == owner:
+            # Wrong side of a boundary: the neighbour took this band.
+            taken = facing_band(pts, xy, h, toward=taker_xy)
+            add(pts[~taken], tid)
+            add(pts[taken], taker)
+        else:
+            add(pts, tid)
+        trunks.append(xy)
 
-    # Under-segmented: two trees both labelled ID 6
-    for center, radius in _CENTERS[4:]:
-        add(make(center, radius), 6)
+    # Over-segmented: one physical tree split by height into two IDs.
+    (low_id, high_id), xy, h, r, split = _OVER_SEGMENTED
+    t = make(xy, h, r)
+    add(t[t[:, 2] < split * h], low_id)
+    add(t[t[:, 2] >= split * h], high_id)
+    trunks.append(xy)
 
-    # Ground/understory (unassigned) and a few stray noise points, spread
-    # across the footprint of every tree above.
-    bounds = ((-3, 25), (-3, 13))
+    # Under-segmented: two physical trees, one ID.
+    tid, members = _UNDER_SEGMENTED
+    for xy, h, r in members:
+        add(make(xy, h, r), tid)
+        trunks.append(xy)
+
+    # Leaked into the ground: a tree, plus (below) a patch of ground with its ID.
+    leak_id, xy, h, r = _LEAKY
+    add(make(xy, h, r), leak_id)
+    trunks.append(xy)
+
+    # False positive: a bush that got its own tree ID.
+    bush_id, xy, bh, br = _BUSH
+    center = (xy[0], xy[1], 0.0)
+    add(bush(center, bh, br, rng=rng) if spacing is None
+        else dense_bush(center, bh, br, spacing=spacing, rng=rng), bush_id)
+    trunks.append(xy)
+
+    # Ground, with the leaked patch carrying tree 11's ID, and stray noise.
     if spacing is None:
-        add(ground(bounds, rng=rng), UNASSIGNED)
+        g = ground(_BOUNDS, rng=rng)
     else:
-        add(dense_ground([c for c, _ in _CENTERS], spacing=spacing, rng=rng),
-            UNASSIGNED)
-    add(floaters(bounds, rng=rng), NOISE)
+        g = dense_ground([(x, y, 0.0) for x, y in trunks], spacing=spacing, rng=rng)
+    (px0, px1), (py0, py1) = _LEAK_PATCH
+    leaked = (g[:, 0] >= px0) & (g[:, 0] <= px1) & (g[:, 1] >= py0) & (g[:, 1] <= py1)
+    add(g[~leaked], UNASSIGNED)
+    add(g[leaked], leak_id)
+    add(floaters(_BOUNDS, rng=rng), NOISE)
 
     # float64 from here on: adding a UTM-sized origin to float32 coordinates
     # would round away the millimetres this just went to the trouble of
@@ -299,9 +411,9 @@ if __name__ == "__main__":
         "--spacing", type=float, default=None, metavar="METRES",
         help="generate a scan-like cloud with points this far apart on the "
              "trunk, crown and ground surfaces, instead of a few thousand "
-             "points per tree. 0.01 gives ~4M points (~140 MB LAS); 0.005 "
-             "gives ~16M (~540 MB). Anything under 0.02 trips segfix's "
-             "dense-cloud check.",
+             "points per tree. Anything under 0.02 trips segfix's "
+             "dense-cloud check; the script prints the point count and file "
+             "size it wrote.",
     )
     ap.add_argument(
         "--origin", type=float, nargs=3, default=None, metavar=("X", "Y", "Z"),
