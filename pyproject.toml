@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "segfix"
-version = "0.7.0"
+version = "1.0.0"
 description = "GUI tool to fix instance segmentation of tree point clouds"
 readme = "README.md"
 requires-python = ">=3.10,<3.13"
@@ -13,7 +13,7 @@ license-files = ["LICENSE"]
 authors = [{name = "Tim Devereux", email = "devereux.tj@gmail.com"}]
 keywords = ["lidar", "point-cloud", "segmentation", "forestry", "vispy"]
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 5 - Production/Stable",
     "Environment :: X11 Applications :: Qt",
     "Intended Audience :: Science/Research",
     "Programming Language :: Python :: 3.10",

@@ -9,7 +9,16 @@ back to a corrected version of the input, retaining all fields.
 
 <img width="2008" height="1044" alt="Segfix Screenshot" src="https://github.com/user-attachments/assets/03a63367-6350-4198-99ad-c29a593d971d" />
 
-Beta note: This software is in beta. Testing is done on Fedora Linux 44 and Windows 11, MacOS should work but has not been tested.
+## Walkthrough video
+
+A 12-minute captioned tour of every tool, fixing every tree in the example
+cloud from `scripts/make_sample.py`, including large coordinates and dense
+clouds. Click to watch
+([subtitles](https://github.com/tim-devereux/segfix/releases/download/v1.0.0/segfix_walkthrough.srt)):
+
+[![Watch the segfix walkthrough](https://raw.githubusercontent.com/tim-devereux/segfix/main/docs/walkthrough.jpg)](https://github.com/tim-devereux/segfix/releases/download/v1.0.0/segfix_walkthrough.mp4)
+
+Testing is done on Fedora Linux 44 and Windows 11. macOS should work but has not been tested.
 
 ## Contributing
 
@@ -111,6 +120,28 @@ dismiss as noise (`X`) are written back as `0` (unassigned), segfix's own
 alone cannot tell noise from unassigned. (arbor writes a signed `treeID`, so
 this does not apply to its output.)
 
+### Large coordinates
+
+Georeferenced clouds (UTM, State Plane, …) have coordinates in the millions,
+while the detail that matters for fixing a segmentation is sub-metre. segfix
+stores coordinates as 32-bit floats, as the GPU does, and a float32 carries only
+about 7 significant digits: a northing around 7,000,000 m is kept to the nearest
+half metre.
+
+So when any coordinate is more than 10 km from the origin, segfix offers a
+**global shift** on load, the way CloudCompare does: a round offset, added to
+every coordinate, that brings the cloud near the origin. The suggested shift
+puts the cloud's minimum corner within a metre of the origin; you can edit X, Y
+and Z before choosing **Apply Shift**, or choose **Keep Original Coordinates**.
+
+The shift applies to this session only. Nothing is written back: **Save**
+patches only the label (or, for RGB-segmented PLY, colour) bytes, so the file
+keeps its real, georeferenced coordinates byte for byte.
+
+If you keep the original coordinates, the cloud loads with that lost precision,
+and segfix skips the dense-cloud check below: a spacing measured on coordinates
+rounded to half a metre would be meaningless, so it won't offer to downsample.
+
 ### Dense clouds
 
 On load segfix measures the cloud's typical point spacing. If points are closer
@@ -131,7 +162,9 @@ The one thing to know is that a voxel is the resolution limit while you work:
 where two trees' points share a voxel, one label represents it, and unassigned
 points that fall inside a tree's voxels aren't separately selectable until you
 reload at full resolution. Pick a voxel smaller than the detail you need to
-separate.
+separate. Edits that move a whole tree (X or U on the current tree, a complete
+merge) still reach every one of its original points, including any in voxels
+where another tree's or the ground's point was the one kept.
 
 ## Editing workflow
 
