@@ -1629,6 +1629,13 @@ class SegFixWidget(QWidget):
     def _apply(self, msg: str) -> None:
         self.c._after_edit(msg)
         self._update_info()  # rebuilds the table; re-syncs bbox/current tree
+        # What's shown depends on labels (the H toggle hides unassigned and
+        # noise; the eye column hides whole trees), so an edit can change it:
+        # points unassigned or marked noise while H is off, or moved into a
+        # hidden tree, have to disappear now -- not at the next unrelated
+        # redraw. After _update_info, so a tree that no longer exists has
+        # already dropped out of hidden_ids.
+        self._apply_visibility()
         self._update_selection()
 
     # -- history -----------------------------------------------------
